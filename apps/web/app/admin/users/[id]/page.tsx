@@ -3,6 +3,7 @@ import { requireRole, apiGet } from "@/lib/session";
 import Shell from "@/components/shell";
 import RoleManager from "./role-manager";
 import MfaManager from "./mfa-manager";
+import OffboardPanel from "./offboard-panel";
 
 interface RoleRow { id: string; roleCode: string; grantedAt: string; revokedAt: string | null }
 
@@ -14,7 +15,8 @@ export default async function UserRolesPage({ params }: { params: Promise<{ id: 
   return (
     <Shell session={session}>
       <Link href="/admin/users" className="muted">← Directory</Link>
-      <h1>Roles</h1>
+      <h1>Account</h1>
+      <OffboardPanel userId={id} />
       <div className="card">
         {rows.length === 0 ? <div className="muted">No roles found.</div> : (
           <table>

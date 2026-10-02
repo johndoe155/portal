@@ -19,6 +19,7 @@ import { hashPassword, assertPasswordPolicy, PasswordPolicyError } from "../cryp
 import { UserCreateBody, RoleGrantBody, IssueInviteBody, StudentPatchBody, GuardianLinkBody, GuardianConfirmBody } from "@portal/contracts";
 import { AuthService } from "../auth/auth.service";
 import { enqueue } from "../notify/notify.service";
+import { buildOffboardPreview, deactivateUser, reactivateUser } from "./offboard.service";
 import { config } from "../config";
 import type { Request } from "express";
 
@@ -116,6 +117,70 @@ export class DirectoryController {
     return withActor(this.db, { userId: p.userId, role: p.activeRole }, async (tx) => {
       const rows = await tx.select().from(userRoles).where(eq(userRoles.userId, id));
       return { data: rows };
+    });
+  }
+
+  /**
+   * Offboarding preview — everything deactivation will affect, BEFORE it
+   * happens. A registrar clicking "deactivate" on a teacher needs to know
+   * they are about to leave four classes without anyone able to mark the
+   * register; finding that out afterwards is how a term falls apart.
+   */
+  @Get("users/:id/offboard-preview")
+  @Perm("directory:write")
+  async offboardPreview(@Req() req: Request, @Param("id") id: string) {
+    const p = req.principal!;
+    const preview = await withActor(this.db, SERVICE, (tx) => buildOffboardPreview(tx, id, p.userId));
+    if (!preview) throw new NotFoundException({ code: "not_found", title: "No such user" });
+    return preview;
+  }
+
+  /**
+   * Deactivate (offboard) a user. Reversible: history is retained, access is
+   * not. See offboard.service.ts for exactly what is revoked.
+   */
+  @Post("users/:id/deactivate")
+  @Perm("directory:write")
+  async deactivate(@Req() req: Request, @Param("id") id: string, @Body() body: unknown) {
+    const p = req.principal!;
+    const b = (body ?? {}) as { reason?: string; end_guardian_links?: boolean; mode?: string };
+    return withActor(this.db, SERVICE, async (tx) => {
+      const preview = await buildOffboardPreview(tx, id, p.userId);
+      if (!preview) throw new NotFoundException({ code: "not_found", title: "No such user" });
+      if (preview.blockers.length) {
+        throw new UnprocessableEntityException({
+          code: "deactivation_blocked",
+          title: "This account cannot be deactivated",
+          detail: preview.blockers.join(" "),
+        });
+      }
+      const result = await deactivateUser(tx, id, { userId: p.userId, role: p.activeRole }, {
+        reason: typeof b.reason === "string" ? b.reason : undefined,
+        // Ending guardian links is the right default for a leaver, but it is
+        // destructive for a parent deactivated by mistake, so it is explicit.
+        endGuardianLinks: b.end_guardian_links === true,
+        mode: b.mode === "suspended" ? "suspended" : "left",
+      });
+      return { ...result, warnings: preview.warnings };
+    });
+  }
+
+  /** Undo a deactivation, restoring exactly the roles it revoked. */
+  @Post("users/:id/reactivate")
+  @Perm("directory:write")
+  async reactivate(@Req() req: Request, @Param("id") id: string, @Body() body: unknown) {
+    const p = req.principal!;
+    const b = (body ?? {}) as { reason?: string };
+    return withActor(this.db, SERVICE, async (tx) => {
+      const [u] = await tx.select().from(users).where(eq(users.id, id)).limit(1);
+      if (!u) throw new NotFoundException({ code: "not_found", title: "No such user" });
+      if (u.status === "active") {
+        throw new UnprocessableEntityException({
+          code: "already_active", title: "This account is already active",
+        });
+      }
+      return reactivateUser(tx, id, { userId: p.userId, role: p.activeRole },
+        { reason: typeof b.reason === "string" ? b.reason : undefined });
     });
   }
 

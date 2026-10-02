@@ -16,6 +16,10 @@ export const users = pgTable("users", {
   mfaLastCounter: bigint("mfa_last_counter", { mode: "number" }),
   /* 0008 review-6: forced change after an admin/CSV-issued temporary password */
   mustChangePassword: boolean("must_change_password").notNull().default(false),
+  /* 0011 offboarding — reversible deactivation, with provenance */
+  deactivatedAt: timestamp("deactivated_at", { withTimezone: true }),
+  deactivatedBy: uuid("deactivated_by"),
+  deactivationReason: text("deactivation_reason"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }),
 });

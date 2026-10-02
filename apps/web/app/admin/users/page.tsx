@@ -27,8 +27,15 @@ export default async function AdminUsers({ searchParams }: { searchParams: Promi
           <tbody>
             {rows.map((u) => (
               <tr key={u.id}>
-                <td>{u.displayName}</td><td>{u.email}</td><td>{u.status}</td>
-                <td><Link href={`/admin/users/${u.id}`}>Roles →</Link></td>
+                <td>{u.displayName}</td><td>{u.email}</td>
+                <td>
+                  <span style={{
+                    padding: "2px 8px", borderRadius: 10, fontSize: ".8rem",
+                    background: u.status === "active" ? "#dcfae6" : "#fde2e1",
+                    color: u.status === "active" ? "#074d31" : "#912018",
+                  }}>{u.status}</span>
+                </td>
+                <td><Link href={`/admin/users/${u.id}`}>Manage →</Link></td>
               </tr>
             ))}
           </tbody>
