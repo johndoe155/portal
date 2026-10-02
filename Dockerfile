@@ -24,8 +24,12 @@ WORKDIR /app
 COPY packages packages
 COPY apps apps
 COPY db db
-COPY scripts scripts         # ops CLIs (mfa-token.mjs — first-admin bootstrap path)
-RUN npm run build            # contracts → api (tsc) → web (next build)
+# ops CLIs (mfa-token.mjs — first-admin bootstrap path; backup/restore drills).
+# NOTE: never put a trailing `#` comment on a COPY/ADD line — Docker parses it
+# as an extra source argument and the build fails.
+COPY scripts scripts
+# contracts → api (tsc) → web (next build)
+RUN npm run build
 # Strip any per-workspace node_modules (dev tree) from the artifact dirs.
 RUN rm -rf apps/api/node_modules apps/web/node_modules packages/contracts/node_modules
 
