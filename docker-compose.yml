@@ -1,0 +1,124 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# School Portal — production-shaped topology on one host.
+#   • postgres is on an internal network only (no published port)
+#   • api + worker are internal-only; the web BFF is internal too
+#   • Caddy is the sole ingress: terminates TLS (automatic ACME certs for real
+#     domains, internal CA on localhost) and forwards to web:3000
+#   • browsers only ever talk to caddy:443 — Secure cookies work everywhere
+# Managed PaaS alternative: drop the postgres service, point DATABASE_URL at
+# Neon/Supabase (eu-west-1) — see docs/phase-1-architecture.md + ADR-010.
+#
+# TRUST_PROXY accounting: caddy → web(Next rewrite) → api ⇒ the API sees two
+# proxy hops appending X-Forwarded-For, so TRUST_PROXY=2 (see .env.example).
+# ─────────────────────────────────────────────────────────────────────────────
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: portal
+      POSTGRES_USER: portal_owner
+      POSTGRES_PASSWORD: ${POSTGRES_OWNER_PASSWORD:?set in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/bootstrap-compose.sql:/docker-entrypoint-initdb.d/10-bootstrap.sql:ro
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U portal_owner -d portal"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  api:
+    build: .
+    restart: unless-stopped
+    command: ["node", "apps/api/dist/main.js"]
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://portal_owner:${POSTGRES_OWNER_PASSWORD:?}@postgres:5432/portal
+      APP_SECRET: ${APP_SECRET:?set in .env — >=32 chars}
+      COOKIE_SECURE: "true"
+      PUBLIC_WEB_ORIGIN: ${PUBLIC_WEB_ORIGIN:-https://portal.school.example}
+      # caddy → web → api: two forwarding hops (review-2).
+      TRUST_PROXY: ${TRUST_PROXY:-2}
+      WORKER_INPROC: "false"
+      PAYSTACK_SECRET: ${PAYSTACK_SECRET:-}
+      PAYSTACK_API_BASE: ${PAYSTACK_API_BASE:-https://api.paystack.co}
+      SMTP_URL: ${SMTP_URL:-}
+      MAIL_FROM: ${MAIL_FROM:-portal@school.example}
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:?set in .env}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:?set in .env}
+    networks: [internal]
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck:
+      # /health is 503 (⇒ wget exit 8) when the DB is unreachable, so this
+      # healthcheck genuinely tracks DB connectivity (review-2).
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/api/v1/health || exit 1"]
+      interval: 10s
+      timeout: 4s
+      retries: 6
+
+  worker:
+    build: .
+    restart: unless-stopped
+    command: ["node", "apps/api/dist/worker/main.js"]
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://portal_owner:${POSTGRES_OWNER_PASSWORD:?}@postgres:5432/portal
+      APP_SECRET: ${APP_SECRET:?}
+      SMTP_URL: ${SMTP_URL:-}
+      MAIL_FROM: ${MAIL_FROM:-portal@school.example}
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:portal@school.example}
+      WORKER_INTERVAL_MS: "5000"
+    networks: [internal]
+    depends_on:
+      postgres: { condition: service_healthy }
+      api: { condition: service_healthy }
+
+  web:
+    build: .
+    restart: unless-stopped
+    command: ["npm", "start", "-w", "@portal/web"]
+    environment:
+      NODE_ENV: production
+      API_INTERNAL: http://api:8080
+      PUBLIC_WEB_ORIGIN: ${PUBLIC_WEB_ORIGIN:-https://portal.school.example}
+    networks: [internal]
+    depends_on:
+      api: { condition: service_healthy }
+
+  # review-2: TLS termination IN the stack. Caddy obtains ACME certs
+  # automatically when PORTAL_DOMAIN is a real domain pointed at this host;
+  # on localhost it uses its internal CA (trusted after `caddy trust` or
+  # adding /data/caddy/pki to the client trust store). HTTP:80 redirects
+  # to HTTPS. HSTS is added by the app middleware when PUBLIC_WEB_ORIGIN is
+  # https (see apps/web/middleware.ts).
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      PORTAL_DOMAIN: ${PORTAL_DOMAIN:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./ops/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [internal]
+    depends_on:
+      - web
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:
+
+networks:
+  internal:
+    driver: bridge

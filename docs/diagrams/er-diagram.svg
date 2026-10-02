@@ -1,0 +1,159 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1760 820" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" role="img" aria-label="High School Portal entity-relationship diagram, Phase 2">
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/>
+    </marker>
+    <style>
+      .dom { stroke-width:1.6; }
+      .dtitle { font-size:12.5px; font-weight:800; letter-spacing:1px; }
+      .t { font-size:11px; fill:#334155; }
+      .lbl { font-size:9.5px; fill:#64748b; font-weight:600; }
+      .edge { stroke:#94a3b8; stroke-width:1.4; fill:none; }
+      .bus { stroke:#64748b; stroke-width:2; fill:none; }
+      .title { font-size:20px; font-weight:800; fill:#0f172a; }
+      .sub { font-size:11px; fill:#64748b; }
+    </style>
+  </defs>
+  <rect width="1760" height="820" fill="#ffffff"/>
+  <text x="40" y="38" class="title">High School Portal — Entity-Relationship (Phase 2)</text>
+  <text x="40" y="58" class="sub">49 tables · 12 domains · uuid-v7 PKs · RLS on every table · _enc/_bidx PII columns · parents read-only by policy · vertical bus = FKs into students</text>
+
+  <!-- ══ ROW 1 ══ -->
+  <rect x="40" y="90" width="300" height="190" rx="12" class="dom" fill="#eef2ff" stroke="#6366f1"/>
+  <text x="56" y="112" class="dtitle" fill="#4338ca">IDENTITY &amp; ACCESS</text>
+  <text x="56" y="134" class="t">users · identities · sessions</text>
+  <text x="56" y="152" class="t">mfa_factors · roles · user_roles</text>
+  <text x="56" y="170" class="t">role_permissions · consent_records</text>
+  <text x="56" y="196" class="lbl">users = one human; roles via user_roles</text>
+  <text x="56" y="212" class="lbl">identities: local | entra | google</text>
+  <text x="56" y="228" class="lbl">sessions = opaque BFF tokens</text>
+
+  <rect x="360" y="90" width="240" height="150" rx="12" class="dom" fill="#ecfdf5" stroke="#059669"/>
+  <text x="376" y="112" class="dtitle" fill="#047857">DIRECTORY</text>
+  <text x="376" y="134" class="t">students · staff · departments</text>
+  <text x="376" y="152" class="t">guardians (student ↔ parent)</text>
+  <text x="376" y="178" class="lbl">students / staff are 1:1 users</text>
+  <text x="376" y="194" class="lbl">guardians = parent auth spine</text>
+  <text x="376" y="210" class="lbl">every parent read joins guardians</text>
+
+  <rect x="620" y="90" width="300" height="210" rx="12" class="dom" fill="#fff7ed" stroke="#ea580c"/>
+  <text x="636" y="112" class="dtitle" fill="#c2410c">ACADEMICS</text>
+  <text x="636" y="134" class="t">academic_years · terms · courses</text>
+  <text x="636" y="152" class="t">course_sections · section_meetings</text>
+  <text x="636" y="170" class="t">section_staff · enrollments</text>
+  <text x="636" y="188" class="t">grade_scales · grade_scale_bands</text>
+  <text x="636" y="214" class="lbl">course_sections = teachable unit</text>
+  <text x="636" y="230" class="lbl">enrollments: student ↔ section</text>
+  <text x="636" y="246" class="lbl">section_staff: 1 teacher + assistants</text>
+  <text x="636" y="262" class="lbl">scale bands: WAEC A1–F9 / A–F</text>
+
+  <!-- ══ ROW 2 (y=360) ══ -->
+  <rect x="40" y="360" width="200" height="110" rx="12" class="dom" fill="#fdf2f8" stroke="#db2777"/>
+  <text x="56" y="382" class="dtitle" fill="#be185d">GRADEBOOK</text>
+    <text x="56" y="404" class="t">grades · comment_bank</text>
+  <text x="56" y="422" class="t">grade_revisions</text>
+  <text x="56" y="448" class="lbl">release-gated · immutable timeline</text>
+
+  <rect x="260" y="360" width="240" height="110" rx="12" class="dom" fill="#f0fdfa" stroke="#0d9488"/>
+  <text x="276" y="382" class="dtitle" fill="#0f766e">ATTENDANCE</text>
+  <text x="276" y="404" class="t">attendance_sessions</text>
+  <text x="276" y="422" class="t">attendance_records</text>
+  <text x="276" y="448" class="lbl">PK (session, student) · offline sync</text>
+
+  <rect x="520" y="360" width="300" height="130" rx="12" class="dom" fill="#f5f3ff" stroke="#7c3aed"/>
+  <text x="536" y="382" class="dtitle" fill="#6d28d9">ASSIGNMENTS &amp; FILES</text>
+  <text x="536" y="404" class="t">assignments · submissions</text>
+  <text x="536" y="422" class="t">files (central storage registry)</text>
+  <text x="536" y="448" class="lbl">presigned S3/R2 · ClamAV scan gate</text>
+  <text x="536" y="464" class="lbl">files referenced by many domains</text>
+
+  <rect x="840" y="360" width="240" height="130" rx="12" class="dom" fill="#fef2f2" stroke="#dc2626"/>
+  <text x="856" y="382" class="dtitle" fill="#b91c1c">EXAMS</text>
+  <text x="856" y="404" class="t">exam_periods · exams</text>
+  <text x="856" y="422" class="t">exam_scores</text>
+  <text x="856" y="448" class="lbl">timetable = exams × enrollments</text>
+
+  <rect x="1100" y="360" width="300" height="170" rx="12" class="dom" fill="#fefce8" stroke="#ca8a04"/>
+  <text x="1116" y="382" class="dtitle" fill="#a16207">FEES</text>
+  <text x="1116" y="404" class="t">fee_items · invoices · invoice_lines</text>
+  <text x="1116" y="422" class="t">payments · payment_allocations</text>
+  <text x="1116" y="448" class="lbl">gateways: paystack | flutterwave | manual</text>
+  <text x="1116" y="464" class="lbl">balance via v_fee_balance</text>
+  <text x="1116" y="480" class="lbl">webhook idempotency on gateway_ref</text>
+
+  <rect x="1420" y="360" width="280" height="130" rx="12" class="dom" fill="#f0fdf4" stroke="#16a34a"/>
+  <text x="1436" y="382" class="dtitle" fill="#15803d">TRANSPORT</text>
+  <text x="1436" y="404" class="t">transport_routes · route_stops</text>
+  <text x="1436" y="422" class="t">student_transport</text>
+  <text x="1436" y="448" class="lbl">levy auto-links to fee_items</text>
+
+  <!-- ══ ROW 3 (y=580) ══ -->
+  <rect x="40" y="580" width="300" height="150" rx="12" class="dom" fill="#eff6ff" stroke="#2563eb"/>
+  <text x="56" y="602" class="dtitle" fill="#1d4ed8">CALENDAR &amp; COMMS</text>
+  <text x="56" y="624" class="t">events · announcements</text>
+  <text x="56" y="642" class="t">conversations · messages</text>
+  <text x="56" y="668" class="lbl">threads anchored to one student</text>
+  <text x="56" y="684" class="lbl">v1 authors = teachers (policy, not schema)</text>
+  <text x="56" y="700" class="lbl">calendars are views, not tables</text>
+
+  <rect x="360" y="580" width="300" height="150" rx="12" class="dom" fill="#faf5ff" stroke="#9333ea"/>
+  <text x="376" y="602" class="dtitle" fill="#7e22ce">NOTIFICATIONS</text>
+  <text x="376" y="624" class="t">notification_preferences</text>
+  <text x="376" y="642" class="t">notifications · notification_deliveries</text>
+  <text x="376" y="660" class="t">push_subscriptions</text>
+  <text x="376" y="686" class="lbl">email + push fan-out via worker</text>
+
+  <rect x="680" y="580" width="200" height="110" rx="12" class="dom" fill="#f8fafc" stroke="#334155"/>
+  <text x="696" y="602" class="dtitle" fill="#0f172a">COMPLIANCE</text>
+  <text x="696" y="624" class="t">audit_log</text>
+  <text x="696" y="642" class="t">report_cards</text>
+  <text x="696" y="668" class="lbl">append-only · precomputed snapshots</text>
+
+  <!-- ══ EDGES ══ -->
+  <path d="M 360 165 L 344 165" class="edge" marker-end="url(#ar)"/>
+  <text x="352" y="158" text-anchor="middle" class="lbl">user_id</text>
+  <path d="M 620 165 L 604 165" class="edge" marker-end="url(#ar)"/>
+  <text x="612" y="178" text-anchor="middle" class="lbl" transform="rotate(-90 612 178)">enrollments</text>
+
+  <!-- students bus -->
+  <path d="M 610 140 L 610 356" class="bus"/>
+  <path d="M 610 150 L 600 150" class="bus" marker-end="url(#ar)"/>
+  <text x="617" y="265" text-anchor="middle" class="lbl" transform="rotate(-90 617 265)">bus → students</text>
+
+  <!-- lane taps (label at source end) -->
+  <path d="M 1560 360 L 1560 312 L 610 312" class="edge"/>
+  <text x="1566" y="310" class="lbl">student_transport</text>
+  <path d="M 1250 360 L 1250 320 L 610 320" class="edge"/>
+  <text x="1256" y="318" class="lbl">invoices</text>
+  <path d="M 960 360 L 960 328 L 610 328" class="edge"/>
+  <text x="966" y="326" class="lbl">exam_scores</text>
+  <path d="M 670 360 L 670 336 L 610 336" class="edge"/>
+  <text x="676" y="334" class="lbl">submissions</text>
+  <path d="M 380 360 L 380 344 L 610 344" class="edge"/>
+  <text x="386" y="342" class="lbl">attendance_records</text>
+  <path d="M 140 360 L 140 352 L 610 352" class="edge"/>
+  <text x="146" y="350" class="lbl">grades</text>
+
+  <!-- row3 taps -->
+  <path d="M 190 580 L 190 560 L 510 560 L 510 356 L 610 356" class="edge"/>
+  <text x="300" y="557" class="lbl">conversations</text>
+  <path d="M 780 580 L 780 554 L 515 554 L 515 308 L 610 308" class="edge"/>
+  <text x="700" y="551" class="lbl">report_cards</text>
+
+  <!-- notifications → users (via left channel) -->
+  <path d="M 360 655 L 250 655 L 250 284" class="edge" marker-end="url(#ar)"/>
+  <text x="255" y="500" text-anchor="middle" class="lbl" transform="rotate(-90 255 500)">notifications.user_id → users</text>
+
+  <!-- fees ↔ transport -->
+  <path d="M 1400 445 L 1416 445" class="edge" marker-end="url(#ar)"/>
+  <text x="1408" y="438" text-anchor="middle" class="lbl">levy</text>
+
+  <!-- legend -->
+  <text x="920" y="580" class="sub">Elbows tap the students bus: every child-scoped domain resolves ownership through students (parents via guardians).</text>
+  <text x="920" y="600" class="sub">gradebook, attendance, assignments and exams all carry section_id → course_sections (omitted for clarity).</text>
+  <text x="920" y="620" class="sub">Intra-domain FKs (invoice_lines→invoices, messages→conversations, grade_revisions→grades, deliveries→notifications) in §3.</text>
+  <text x="920" y="640" class="sub">files is referenced by assignments, submissions, report_cards (pdf_file_id) and users (avatar_file_id).</text>
+  <text x="920" y="660" class="sub">Views: v_student_schedule · v_student_calendar · v_fee_balance · v_teacher_today · v_parent_dashboard — no duplicated state.</text>
+  <text x="920" y="680" class="sub">RLS: parents SELECT-only everywhere; teachers scoped via section_staff; students gated by released_at/published_at; audit_log insert-only.</text>
+  <text x="920" y="700" class="sub">Retention: transcripts permanent · attendance 5y · files 3y · messages 24mo · fees 7y · audit 7y (see §8).</text>
+</svg>

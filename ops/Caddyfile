@@ -1,0 +1,31 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# School Portal — TLS ingress (review-2).
+#
+# PORTAL_DOMAIN env (docker-compose) selects the site address:
+#   • real domain (portal.school.example) with DNS on this host ⇒ Caddy
+#     obtains + renews ACME (Let's Encrypt) certificates automatically.
+#   • `localhost` ⇒ Caddy's internal CA issues a local cert; trust it once
+#     with `caddy trust` (or add /data/caddy/pki/authorities/local/root.crt
+#     to the client trust store).
+#
+# The app's own HSTS header is emitted by apps/web/middleware.ts whenever
+# PUBLIC_WEB_ORIGIN is https:// — keep the two consistent.
+# ─────────────────────────────────────────────────────────────────────────────
+
+{$PORTAL_DOMAIN:localhost} {
+	encode zstd gzip
+
+	# Everything goes to the Next.js BFF; it rewrites /api/* to the API.
+	reverse_proxy web:3000 {
+		# Preserve the real client for the API's req.ip accounting
+		# (caddy → web → api = two trusted hops; TRUST_PROXY=2 on the API).
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Forwarded-Host {host}
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

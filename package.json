@@ -1,0 +1,12 @@
+{
+  "name": "high-school-portal",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": ["packages/*", "apps/*"],
+  "engines": { "node": ">=20.19" },
+  "scripts": {
+    "build": "npm run build -w @portal/contracts && npm run build -w @portal/api && npm run build -w @portal/web",
+    "test": "npm run test -w @portal/api",
+    "start": "npm run start -w @portal/api"
+  }
+}
