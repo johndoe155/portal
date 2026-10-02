@@ -60,9 +60,24 @@ The reconciliation report is the acceptance checklist:
 Only when this page is clean should the school stop using its old spreadsheet. From that moment the portal is the system of record (ADR-013).
 
 ## 9. First week operations
-- Nightly encrypted `pg_dump` → R2 (`scripts/backup.sh`, 35-day retention).
+- **Backups** — the `backup` service takes a nightly AES-256 encrypted `pg_dump`
+  (02:15 UTC), uploads it to the configured bucket, prunes to 35 days, and
+  restore-tests the newest copy every Sunday. Full scheme, restore procedure and
+  drill: [docs/backup-restore.md](./backup-restore.md).
+  Before go-live, confirm `GET /api/v1/health` shows `backup.offsite: true` and,
+  after the first Sunday, `backup.restoreTest.result: "passed"`.
+- **Monitoring** — alert on `/api/v1/health` returning a non-empty `warnings[]`.
+  That single check covers stalled backups, failed restore drills, undeliverable
+  email and a stuck notification outbox.
 - Staff TOTP resets: `scripts/mfa-token.mjs <email>` (requires the admin endpoint or ops CLI).
 - Watch `audit_log` for `guardian_link.*`, `fee.*`, `import.*` actions — every phase-6 write is audited.
 
 ## Rollback
-The portal is stateless above Postgres: restore the nightly dump, redeploy the previous image tag. Nothing in the pilot writes back to the school's old systems.
+The portal is stateless above Postgres: restore the nightly dump
+(`scripts/restore.sh`, see [docs/backup-restore.md](./backup-restore.md)) and
+redeploy the previous image tag. Stop `api`, `worker` and `web` before
+restoring. Nothing in the pilot writes back to the school's old systems.
+
+Recovery objectives: **RPO ≤ 24 h** (nightly dumps — use managed PITR if the
+school cannot accept a day's loss), **RTO ≤ 2 h**. Measure the real RTO during
+a drill rather than trusting this number.

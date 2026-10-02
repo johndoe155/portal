@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { requireRole, apiGet } from "@/lib/session";
 import Shell from "@/components/shell";
+import SystemStatus from "./system-status";
 
 interface Section { id: string; name: string; courseCode: string; courseTitle: string }
 interface UsersRes { meta: { total: number } }
@@ -14,6 +15,7 @@ export default async function AdminHome() {
   return (
     <Shell session={session}>
       <h1>Admin console</h1>
+      <SystemStatus />
       <div className="grid cols3">
         <div className="stat"><div className="muted">People</div><div className="n">{users?.meta.total ?? "—"}</div></div>
         <div className="stat"><div className="muted">Course sections</div><div className="n">{sections?.data.length ?? "—"}</div></div>

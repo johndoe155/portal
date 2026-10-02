@@ -50,6 +50,16 @@ services:
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
       BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:?set in .env}
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:?set in .env}
+      # Written by the backup sidecar; surfaced on /api/v1/health so a backup
+      # chain that silently stopped becomes visible instead of being assumed.
+      BACKUP_HEARTBEAT_FILE: /var/lib/portal/state/last-backup.json
+      BACKUP_VERIFY_FILE: /var/lib/portal/state/last-restore-test.json
+      BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET:-}
+      BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
+      IMPORT_TMP_DIR: /var/lib/portal/imports
+    volumes:
+      - portal_state:/var/lib/portal/state
+      - portal_imports:/var/lib/portal/imports
     networks: [internal]
     depends_on:
       postgres: { condition: service_healthy }
@@ -75,6 +85,11 @@ services:
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
       VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:portal@school.example}
       WORKER_INTERVAL_MS: "5000"
+      # The worker processes roster import jobs, so it must see the same
+      # uploaded files the API parked.
+      IMPORT_TMP_DIR: /var/lib/portal/imports
+    volumes:
+      - portal_imports:/var/lib/portal/imports
     networks: [internal]
     depends_on:
       postgres: { condition: service_healthy }
@@ -91,6 +106,43 @@ services:
     networks: [internal]
     depends_on:
       api: { condition: service_healthy }
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Nightly encrypted backup + weekly restore drill. The runbook promises both;
+  # this service is what actually performs them. Without it scripts/backup.sh
+  # is just a file in the repo that nobody runs.
+  # ───────────────────────────────────────────────────────────────────────────
+  backup:
+    build:
+      context: .
+      dockerfile: ops/backup/Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://portal_owner:${POSTGRES_OWNER_PASSWORD:?}@postgres:5432/portal
+      BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:?set in .env — openssl rand -base64 32}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-35}
+      BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET:-}
+      BACKUP_S3_ENDPOINT: ${BACKUP_S3_ENDPOINT:-}
+      BACKUP_S3_REGION: ${BACKUP_S3_REGION:-auto}
+      BACKUP_S3_PREFIX: ${BACKUP_S3_PREFIX:-portal}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      BACKUP_CRON: ${BACKUP_CRON:-15 02 * * *}
+      BACKUP_VERIFY_CRON: ${BACKUP_VERIFY_CRON:-40 03 * * 0}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - portal_backups:/var/lib/portal/backups
+      - portal_state:/var/lib/portal/state
+    networks: [internal]
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck:
+      # Unhealthy once the newest backup is older than 36 hours.
+      test: ["CMD-SHELL", "find /var/lib/portal/state/last-backup.json -mmin -2160 | grep -q . || exit 1"]
+      interval: 10m
+      timeout: 10s
+      retries: 3
+      start_period: 5m
 
   # review-2: TLS termination IN the stack. Caddy obtains ACME certs
   # automatically when PORTAL_DOMAIN is a real domain pointed at this host;
@@ -118,6 +170,9 @@ volumes:
   pgdata:
   caddy_data:
   caddy_config:
+  portal_backups:   # encrypted dumps staged before/alongside the offsite copy
+  portal_state:     # backup + restore-drill heartbeats, read by /health
+  portal_imports:   # roster CSVs in flight between the API and the worker
 
 networks:
   internal:

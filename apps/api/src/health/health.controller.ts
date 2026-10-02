@@ -56,6 +56,18 @@ export class HealthController {
         ? `last successful backup was ${backup.ageHours}h ago`
         : "backups are configured but none has ever completed");
     }
+    if (backup.configured && !backup.offsite) {
+      warnings.push("backups are not being copied off this host — a host failure loses them");
+    }
+    // An untested backup is an assumption. Say so out loud.
+    const rt = backup.restoreTest;
+    if (rt?.result === "failed") {
+      warnings.push(`the last restore drill FAILED${rt.detail ? `: ${rt.detail}` : ""} — backups may be unusable`);
+    } else if (rt?.stale && rt.result === "never") {
+      warnings.push("no restore drill has ever run — these backups are unverified");
+    } else if (rt?.stale && rt.lastTestAt) {
+      warnings.push(`last successful restore drill was ${rt.ageDays} days ago`);
+    }
 
     return {
       status: dbUp ? "ok" : "degraded",
