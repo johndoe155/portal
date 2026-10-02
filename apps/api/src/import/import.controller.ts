@@ -1,385 +1,400 @@
 import {
-  Body, Controller, ForbiddenException, Inject, NotFoundException, Param, Post, Req,
-  UnprocessableEntityException,
+  BadRequestException, Body, Controller, ForbiddenException, Get, Header, Inject,
+  NotFoundException, Param, Post, Query, Req, Res, UnprocessableEntityException,
+  UploadedFile, UseInterceptors,
 } from "@nestjs/common";
-import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { and, eq, sql } from "drizzle-orm";
+import { FileInterceptor } from "@nestjs/platform-express";
+import { diskStorage } from "multer";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { randomUUID } from "node:crypto";
+import { desc, eq, inArray } from "drizzle-orm";
 import type { Db } from "../db/client";
 import { DB_TOKEN } from "../db/token";
 import { withActor, SERVICE } from "../db/actor";
-import {
-  users, students, userRoles, identities, courseSections, courses, enrollments,
-  guardians, terms, passwordResetTokens,
-} from "../db/schema";
+import { importJobs } from "../db/schema";
 import { Perm } from "../common/guards";
 import { insertAudit } from "../common/audit";
-import { assertCanGrant } from "../common/role-policy";
-import { hashPassword, assertPasswordPolicy, PasswordPolicyError } from "../crypto/password";
-import { enqueue } from "../notify/notify.service";
-import { config } from "../config";
+import { mailConfigured } from "../notify/mailer";
+import {
+  parseImportCsv, planPasswords, processRows, toCsvRow, ImportShapeError,
+  IMPORT_KINDS, KIND_HEADERS, type ImportKind, type RowResult,
+} from "./import.engine";
+import { runJob, toJobView } from "./import.jobs";
 import { ImportBody } from "@portal/contracts";
-import type { Request } from "express";
+import type { Request, Response } from "express";
 
-const sha = (s: string) => createHash("sha256").update(s).digest("hex");
+export { parseCsv } from "./import.engine";
 
-/** Minimal RFC4180-ish parser: quoted fields, escaped quotes, CRLF. */
-export function parseCsv(text: string): string[][] {
-  const rows: string[][] = [];
-  let row: string[] = [], field = "", inQuotes = false;
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (inQuotes) {
-      if (c === '"') {
-        if (text[i + 1] === '"') { field += '"'; i++; }
-        else inQuotes = false;
-      } else field += c;
-    } else if (c === '"') inQuotes = true;
-    else if (c === ",") { row.push(field); field = ""; }
-    else if (c === "\n" || c === "\r") {
-      if (c === "\r" && text[i + 1] === "\n") i++;
-      row.push(field); field = "";
-      if (row.some((f) => f.trim() !== "")) rows.push(row);
-      row = [];
-    } else field += c;
-  }
-  row.push(field);
-  if (row.some((f) => f.trim() !== "")) rows.push(row);
-  return rows;
+const TMP_DIR = () => process.env.IMPORT_TMP_DIR ?? "./data/imports";
+const MAX_UPLOAD_BYTES = () => Math.max(1, Number(process.env.IMPORT_MAX_UPLOAD_MB ?? 25)) * 1024 * 1024;
+
+/** Kinds that create accounts, and therefore pay ~100 ms of scrypt per row. */
+const ACCOUNT_KINDS = new Set<ImportKind>(["students", "staff", "guardians"]);
+
+/**
+ * Rows above which the synchronous path refuses and insists on a background
+ * job. The cap is cost-based, not a flat number, because the costs differ by
+ * two orders of magnitude:
+ *
+ *   - committing accounts  → scrypt dominates (~100 ms/row): 200 rows ≈ 20 s,
+ *     already close to the Next proxy's ~30 s timeout;
+ *   - committing sections/enrolments → a few indexed queries per row;
+ *   - dry runs → no hashing at all, just validation reads.
+ *
+ * A flat limit would needlessly push a harmless 600-row dry run into a job.
+ */
+function syncRowLimit(kind: ImportKind, dryRun: boolean): number {
+  if (dryRun) return Number(process.env.IMPORT_SYNC_DRYRUN_LIMIT ?? 5000);
+  return ACCOUNT_KINDS.has(kind)
+    ? Number(process.env.IMPORT_SYNC_ROW_LIMIT ?? 200)
+    : Number(process.env.IMPORT_SYNC_ROW_LIMIT_CHEAP ?? 1000);
 }
 
-type RowResult = { row: number; status: "ok" | "duplicate" | "error"; errors?: string[];
-  /** review-6 #3: set-password link for accounts created without a CSV password (dev sink only) */
-  set_password_url?: string };
-
-/** review-6 #3: strong generated password — the user replaces it via the emailed link. */
-const genTempPassword = () => `Aa1!${randomBytes(12).toString("base64url")}`;
-/** review-6 #2: fallback display name when the parents CSV omits guardian_name. */
-const nameFromEmail = (email: string) => {
-  const local = email.split("@")[0].replace(/[._-]+/g, " ").trim();
-  return local.replace(/\b\w/g, (c) => c.toUpperCase()) || email;
-};
-const IMPORT_RESET_TTL_MS = 24 * 60 * 60 * 1000; // 24 h — longer than the 1 h self-service reset
-
-const STAFF_ROLES = new Set(["teacher", "teacher_assistant", "registrar", "counselor"]);
+function assertKind(kind: string): ImportKind {
+  if (!(IMPORT_KINDS as readonly string[]).includes(kind)) {
+    throw new NotFoundException({
+      code: "unknown_import_kind",
+      detail: IMPORT_KINDS.join(" | "),
+    });
+  }
+  return kind as ImportKind;
+}
 
 /**
  * Phase 6: bulk CSV import — the bridge from spreadsheets/SIS exports.
- * Every kind supports dry_run (validate everything, write nothing) and
- * dedupes on the natural key (admission number / email / composite).
- * A commit applies all valid rows in ONE transaction; invalid rows are
- * reported and skipped (never half-import a row).
+ *
+ * Two entry points, one engine:
+ *   POST /import/:kind         JSON body, synchronous — small pastes, dry runs
+ *   POST /import/:kind/upload  multipart, asynchronous — real school files
+ *
+ * Every kind supports dry_run (validate everything, write nothing) and dedupes
+ * on the natural key (admission number / email / composite), so re-running a
+ * corrected file is always safe.
  */
 @Controller()
 export class ImportController {
   constructor(@Inject(DB_TOKEN) private db: Db) {}
 
+  /** The expected header for each kind — drives the admin UI and the docs. */
+  @Get("import/templates")
+  @Perm("directory:read")
+  templates() {
+    return {
+      data: IMPORT_KINDS.map((kind) => ({
+        kind,
+        header: KIND_HEADERS[kind],
+        sample: toCsvRow(KIND_HEADERS[kind]).trim(),
+      })),
+      maxUploadMb: MAX_UPLOAD_BYTES() / 1024 / 1024,
+      syncRowLimit: syncRowLimit("students", false),
+      syncDryRunLimit: syncRowLimit("students", true),
+    };
+  }
+
+  /** Blank CSV with the correct header — removes "what columns?" guesswork. */
+  @Get("import/:kind/template.csv")
+  @Perm("directory:read")
+  @Header("content-type", "text/csv; charset=utf-8")
+  templateCsv(@Param("kind") kind: string, @Res({ passthrough: true }) res: Response) {
+    const k = assertKind(kind);
+    res.setHeader("content-disposition", `attachment; filename="${k}-template.csv"`);
+    return toCsvRow(KIND_HEADERS[k]);
+  }
+
+  /**
+   * Synchronous import (JSON body). Kept for small pastes and dry runs; a file
+   * larger than SYNC_ROW_LIMIT is rejected with a pointer at the upload route
+   * rather than being allowed to time out halfway through.
+   */
   @Post("import/:kind")
   async import(@Req() req: Request, @Param("kind") kind: string, @Body() body: unknown) {
     const parsed = ImportBody.safeParse(body);
     if (!parsed.success) {
       throw new UnprocessableEntityException({ code: "validation", detail: parsed.error.message });
     }
+    const k = assertKind(kind);
     const p = req.principal!;
-    // per-kind capability, same rule the @Perm decorator enforces
-    const perm = (kind === "sections" || kind === "enrollments") ? "academics:write" : "directory:write";
-    if (!p.perms.includes(perm)) {
-      throw new ForbiddenException({ code: "missing_capability", detail: `requires ${perm}` });
-    }
+    this.assertKindPermission(k, p.perms);
     const dryRun = parsed.data.dry_run ?? false;
 
-    const grid = parseCsv(parsed.data.csv);
-    if (grid.length < 2) {
-      throw new UnprocessableEntityException({ code: "csv_empty", detail: "header + at least one row required" });
-    }
-    const header = grid[0].map((h) => h.trim().toLowerCase());
-    const records = grid.slice(1).map((cells, i) => ({
-      rowNum: i + 2,
-      get: (name: string) => (cells[header.indexOf(name)] ?? "").trim(),
-    }));
-
-    const results: RowResult[] = [];
-    let created = 0, duplicates = 0;
-
-    // review-6 #3: the password column is OPTIONAL for students/staff. Rows
-    // without one get a generated password + an emailed set-password link
-    // (import-then-invite — no plaintext passwords in the school's CSV).
-    // review-6 #3b: scrypt is ~100ms/row — every hash is derived HERE, outside
-    // the transaction, so a large file never holds locks while hashing.
-    // Guardians rows always plan a generated password (account may be created).
-    const passwordPlan = new Map<number, { hash?: string; generated: boolean; temp?: string }>();
-    if (kind === "students" || kind === "staff" || kind === "guardians") {
-      for (const rec of records) {
-        const given = kind === "guardians" ? "" : rec.get("password");
-        if (given) {
-          try { assertPasswordPolicy(given); passwordPlan.set(rec.rowNum, { generated: false }); }
-          catch { /* surfaced as a row error inside run() */ }
-        } else passwordPlan.set(rec.rowNum, { generated: true });
+    let records;
+    try {
+      ({ records } = parseImportCsv(k, parsed.data.csv));
+    } catch (e) {
+      if (e instanceof ImportShapeError) {
+        throw new UnprocessableEntityException({ code: e.code, detail: e.message });
       }
-      if (!dryRun) {
-        for (const rec of records) {
-          const plan = passwordPlan.get(rec.rowNum);
-          if (!plan) continue;
-          const pw = plan.generated ? genTempPassword() : rec.get("password");
-          if (plan.generated) plan.temp = pw;
-          plan.hash = await hashPassword(pw);
-        }
-      }
+      throw e;
     }
 
-    /** create a set-password (reset) token + email; returns the link for the dev sink */
-    const issueSetPassword = async (tx: any, userId: string, email: string): Promise<string> => {
-      const token = randomBytes(24).toString("base64url");
-      await tx.insert(passwordResetTokens).values({
-        id: randomUUID(), userId, tokenHash: sha(token),
-        expiresAt: new Date(Date.now() + IMPORT_RESET_TTL_MS),
+    const limit = syncRowLimit(k, dryRun);
+    if (records.length > limit) {
+      throw new UnprocessableEntityException({
+        code: "file_too_large_for_sync",
+        title: "Use the file upload for a roster this size",
+        detail: `${records.length} rows exceeds the ${limit}-row synchronous limit. ` +
+          `POST the file to /api/v1/import/${k}/upload instead — it runs as a background ` +
+          `job with progress, and is the path designed for whole-school files.`,
       });
-      const link = `${config.publicWebOrigin}/reset?token=${token}`;
-      await enqueue(tx, { recipientUserId: userId, channel: "email",
-        kind: "password_reset", payload: { link } });
-      return link;
+    }
+
+    // scrypt happens before the transaction opens (~100 ms/row).
+    const plans = await planPasswords(k, records, dryRun);
+    const ctx = {
+      kind: k, dryRun, actorUserId: p.userId, actorRole: p.activeRole,
+      smtpConfigured: mailConfigured(),
     };
 
-    const run = async (tx: any) => {
-      for (const rec of records) {
-        const errors: string[] = [];
-        let status: RowResult["status"] = "ok";
-        let setPasswordUrl: string | undefined;
-        const plan = passwordPlan.get(rec.rowNum);
-        try {
-          switch (kind) {
-            case "students": {
-              const email = rec.get("email").toLowerCase();
-              const name = rec.get("display_name");
-              const password = rec.get("password"); // optional — review-6 #3
-              const grade = Number(rec.get("grade_level"));
-              let admissionNo = rec.get("admission_no").toUpperCase();
-              if (!email.includes("@")) errors.push("email invalid");
-              if (!name) errors.push("display_name required");
-              if (!Number.isInteger(grade) || grade < 1 || grade > 13) errors.push("grade_level 1–13 required");
-              if (password) {
-                try { assertPasswordPolicy(password); }
-                catch (e) { if (e instanceof PasswordPolicyError) errors.push(`password: ${e.detail}`); }
-              }
-              if (errors.length) break;
-              if (admissionNo) {
-                const [taken] = await tx.select({ userId: students.userId }).from(students)
-                  .where(eq(students.admissionNo, admissionNo)).limit(1);
-                if (taken) { status = "duplicate"; break; } // dedupe on admission number
-              }
-              const [emailTaken] = await tx.select({ id: users.id }).from(users)
-                .where(eq(sql`lower(${users.email})`, email)).limit(1);
-              if (emailTaken) { errors.push("email already registered"); break; }
-              if (!dryRun) {
-                const [user] = await tx.insert(users).values({
-                  email, displayName: name, passwordHash: plan!.hash!,
-                  // review-6 #3: a CSV-supplied password is a temporary secret —
-                  // the account is locked to /auth until the student changes it
-                  mustChangePassword: plan!.generated === false,
-                }).returning({ id: users.id });
-                await tx.insert(identities).values({ userId: user.id, provider: "local", subject: email });
-                await tx.insert(userRoles).values({ id: randomUUID(), userId: user.id, roleCode: "student" });
-                if (!admissionNo) {
-                  const [{ n }] = await tx.select({ n: sql<number>`count(*)::int` }).from(students);
-                  admissionNo = `STU-${String(n + 1).padStart(4, "0")}`;
-                }
-                await tx.insert(students).values({ userId: user.id, admissionNo, gradeLevel: grade });
-                if (plan!.generated) {
-                  const link = await issueSetPassword(tx, user.id, email);
-                  if (!process.env.SMTP_URL) setPasswordUrl = link; // dev sink: show once
-                }
-              }
-              created++;
-              break;
-            }
-            case "staff": {
-              const email = rec.get("email").toLowerCase();
-              const name = rec.get("display_name");
-              const password = rec.get("password"); // optional — review-6 #3
-              const role = rec.get("role");
-              if (!email.includes("@")) errors.push("email invalid");
-              if (!name) errors.push("display_name required");
-              if (!STAFF_ROLES.has(role)) errors.push(`role must be one of ${[...STAFF_ROLES].join(", ")}`);
-              else assertCanGrant(p.activeRole, [role]);
-              if (password) {
-                try { assertPasswordPolicy(password); }
-                catch (e) { if (e instanceof PasswordPolicyError) errors.push(`password: ${e.detail}`); }
-              }
-              if (errors.length) break;
-              const [emailTaken] = await tx.select({ id: users.id }).from(users)
-                .where(eq(sql`lower(${users.email})`, email)).limit(1);
-              if (emailTaken) { status = "duplicate"; break; } // dedupe on email
-              if (!dryRun) {
-                const [user] = await tx.insert(users).values({
-                  email, displayName: name, passwordHash: plan!.hash!,
-                  mustChangePassword: plan!.generated === false, // review-6 #3
-                }).returning({ id: users.id });
-                await tx.insert(identities).values({ userId: user.id, provider: "local", subject: email });
-                await tx.insert(userRoles).values({ id: randomUUID(), userId: user.id, roleCode: role });
-                if (plan!.generated) {
-                  const link = await issueSetPassword(tx, user.id, email);
-                  if (!process.env.SMTP_URL) setPasswordUrl = link;
-                }
-              }
-              created++;
-              break;
-            }
-            case "guardians": {
-              const admissionNo = rec.get("student_admission_no").toUpperCase();
-              const guardianEmail = rec.get("guardian_email").toLowerCase();
-              const relationship = rec.get("relationship");
-              if (!admissionNo) errors.push("student_admission_no required");
-              if (!guardianEmail.includes("@")) errors.push("guardian_email invalid");
-              if (!relationship) errors.push("relationship required");
-              if (errors.length) break;
-              const [stu] = await tx.select({ userId: students.userId }).from(students)
-                .where(eq(students.admissionNo, admissionNo)).limit(1);
-              if (!stu) { errors.push("no student with that admission number"); break; }
-              let [guardian] = await tx.select({ id: users.id, displayName: users.displayName }).from(users)
-                .where(and(eq(sql`lower(${users.email})`, guardianEmail),
-                  eq(users.status, "active"))).limit(1);
-              if (!guardian && !dryRun) {
-                // review-6 #2: bulk parent onboarding — create the account here
-                // (generated password + emailed set-password link, 24 h) instead
-                // of forcing one-at-a-time invites. The guardian link below stays
-                // PENDING until the parent verifies, exactly like the UI path.
-                const gname = rec.get("guardian_name") || nameFromEmail(guardianEmail);
-                [guardian] = await tx.insert(users).values({
-                  email: guardianEmail, displayName: gname, passwordHash: plan!.hash!,
-                }).returning({ id: users.id, displayName: users.displayName });
-                await tx.insert(identities).values({ userId: guardian.id, provider: "local", subject: guardianEmail });
-                await tx.insert(userRoles).values({ id: randomUUID(), userId: guardian.id, roleCode: "parent" });
-                const link = await issueSetPassword(tx, guardian.id, guardianEmail);
-                if (!process.env.SMTP_URL) setPasswordUrl = link;
-              }
-              if (!guardian) break; // dry run: account would be created — row counts as valid
-              const [dupe] = await tx.select({ id: guardians.id }).from(guardians)
-                .where(and(eq(guardians.studentUserId, stu.userId), eq(guardians.userId, guardian.id))).limit(1);
-              if (dupe) { status = "duplicate"; break; }
-              if (!dryRun) {
-                const token = randomBytes(24).toString("base64url");
-                await tx.insert(guardians).values({
-                  studentUserId: stu.userId, userId: guardian.id, relationship,
-                  verifiedAt: null, verifyTokenHash: sha(token), requestedBy: p.userId,
-                });
-                await enqueue(tx, { recipientEmail: guardianEmail, channel: "email",
-                  kind: "guardian_verify",
-                  payload: { display_name: guardian.displayName,
-                    verifyUrl: `${config.publicWebOrigin}/parent/verify?token=${token}` } });
-              }
-              created++;
-              break;
-            }
-            case "sections": {
-              const code = rec.get("course_code").toUpperCase();
-              const title = rec.get("course_title");
-              const name = rec.get("name");
-              const termName = rec.get("term_name");
-              if (!code) errors.push("course_code required");
-              if (!title) errors.push("course_title required");
-              if (!name) errors.push("name required");
-              const [term] = await tx.select({ id: terms.id }).from(terms)
-                .where(eq(terms.name, termName)).limit(1);
-              if (!term) errors.push(`no term named '${termName}'`);
-              if (errors.length) break;
-              let [course] = await tx.select().from(courses).where(eq(courses.code, code)).limit(1);
-              const [dupe] = course
-                ? await tx.select({ id: courseSections.id }).from(courseSections)
-                  .where(and(eq(courseSections.courseId, course.id), eq(courseSections.termId, term.id),
-                    eq(courseSections.name, name))).limit(1)
-                : [undefined];
-              if (dupe) { status = "duplicate"; break; }
-              if (!dryRun) {
-                if (!course) {
-                  [course] = await tx.insert(courses)
-                    .values({ id: randomUUID(), code, title }).returning();
-                }
-                await tx.insert(courseSections).values({
-                  id: randomUUID(), courseId: course.id, termId: term.id, name,
-                });
-              }
-              created++;
-              break;
-            }
-            case "enrollments": {
-              const admissionNo = rec.get("student_admission_no").toUpperCase();
-              const code = rec.get("course_code").toUpperCase();
-              const sectionName = rec.get("section_name");
-              const termName = rec.get("term_name");
-              if (!admissionNo) errors.push("student_admission_no required");
-              const [stu] = await tx.select({ userId: students.userId }).from(students)
-                .where(eq(students.admissionNo, admissionNo)).limit(1);
-              if (!stu) errors.push("no student with that admission number");
-              const [term] = await tx.select({ id: terms.id }).from(terms)
-                .where(eq(terms.name, termName)).limit(1);
-              if (!term) errors.push(`no term named '${termName}'`);
-              let section;
-              if (term) {
-                [section] = await tx.select({ id: courseSections.id }).from(courseSections)
-                  .innerJoin(courses, eq(courses.id, courseSections.courseId))
-                  .where(and(eq(courseSections.termId, term.id), eq(courseSections.name, sectionName),
-                    eq(courses.code, code))).limit(1);
-                if (!section) errors.push(`no section '${sectionName}' for ${code} in ${termName}`);
-              }
-              if (errors.length) break;
-              const [dupe] = await tx.select({ id: enrollments.id }).from(enrollments)
-                .where(and(eq(enrollments.studentUserId, stu.userId),
-                  eq(enrollments.sectionId, section!.id), eq(enrollments.status, "enrolled"))).limit(1);
-              if (dupe) { status = "duplicate"; break; }
-              if (!dryRun) {
-                await tx.insert(enrollments).values({
-                  id: randomUUID(), studentUserId: stu.userId, sectionId: section!.id,
-                });
-              }
-              created++;
-              break;
-            }
-            default:
-              throw new NotFoundException({ code: "unknown_import_kind",
-                detail: "students | staff | guardians | sections | enrollments" });
-          }
-        } catch (e: any) {
-          if (e?.response?.code === "role_above_your_tier") errors.push(e.response.title ?? "role above your tier");
-          else if (e instanceof NotFoundException) throw e;
-          else errors.push(String(e?.message ?? e).slice(0, 120));
-        }
-        if (errors.length) status = "error";
-        if (status === "duplicate") duplicates++;
-        results.push({ row: rec.rowNum, status, ...(errors.length ? { errors } : {}),
-          ...(setPasswordUrl ? { set_password_url: setPasswordUrl } : {}) });
-      }
-    };
-
-    // dry run must not persist — run on a transaction we always roll back by
-    // throwing a sentinel; commits run the same code path and persist.
+    let outcome;
     if (dryRun) {
+      // dry run must not persist — run on a transaction we always roll back by
+      // throwing a sentinel; commits run the same code path and persist.
       try {
         await withActor(this.db, SERVICE, async (tx) => {
-          await run(tx);
-          throw new Error("__dry_run__");
+          const o = await processRows(tx, records, plans, ctx);
+          throw Object.assign(new Error("__dry_run__"), { outcome: o });
         });
+        outcome = { results: [] as RowResult[], created: 0, duplicates: 0, errors: 0 };
       } catch (e: any) {
-        if (String(e?.message) !== "__dry_run__") throw e;
+        if (e?.message !== "__dry_run__") throw e;
+        outcome = e.outcome;
       }
-      created = 0; duplicates = 0;
-      for (const r of results) { if (r.status === "ok") created++; if (r.status === "duplicate") duplicates++; }
+      // A dry run reports what WOULD be created. Some branches (a guardian
+      // whose account does not exist yet) legitimately never reach the
+      // `created++` line because the write is skipped, so recount from the
+      // row verdicts instead of trusting the write counter.
+      outcome = {
+        ...outcome,
+        created: outcome.results.filter((r: RowResult) => r.status === "ok").length,
+        duplicates: outcome.results.filter((r: RowResult) => r.status === "duplicate").length,
+      };
     } else {
-      await withActor(this.db, SERVICE, async (tx) => {
-        await run(tx);
-        await insertAudit(tx, { actorUserId: p.userId, action: "import.completed",
-          entityType: "import", after: { kind, rows: records.length, created,
-            duplicates, errors: results.filter((r) => r.status === "error").length }, ip: req.ip });
+      outcome = await withActor(this.db, SERVICE, async (tx) => {
+        const o = await processRows(tx, records, plans, ctx);
+        await insertAudit(tx, {
+          actorUserId: p.userId, action: "import.completed", entityType: "import",
+          after: { kind: k, rows: records.length, created: o.created,
+            duplicates: o.duplicates, errors: o.errors }, ip: req.ip,
+        });
+        return o;
       });
     }
 
     return {
-      kind, dry_run: dryRun, total: records.length,
-      valid: results.filter((r) => r.status === "ok").length,
-      duplicates, errors: results.filter((r) => r.status === "error").length,
-      ...(dryRun ? { would_create: created } : { created }),
+      kind: k, dry_run: dryRun, total: records.length,
+      valid: outcome.results.filter((r: RowResult) => r.status === "ok").length,
+      duplicates: outcome.duplicates, errors: outcome.errors,
+      ...(dryRun ? { would_create: outcome.created } : { created: outcome.created }),
       // review-6 #5: every problem row is listed (no 500 cap). Ok rows are
       // omitted to keep the payload small — EXCEPT ones carrying a set-password
       // link, which the admin must see once. Counts above cover the full file.
-      rows: results.filter((r) => r.status !== "ok" || r.set_password_url),
+      rows: outcome.results.filter((r: RowResult) => r.status !== "ok" || r.set_password_url),
     };
+  }
+
+  /**
+   * Asynchronous import: stream the file to disk, create a job, return 202.
+   *
+   * This is the path that makes a whole-school roster possible. The old JSON
+   * body hit the 1 MB express cap and the ~30 s proxy timeout long before a
+   * real enrolments file finished.
+   */
+  @Post("import/:kind/upload")
+  @UseInterceptors(FileInterceptor("file", {
+    storage: diskStorage({
+      destination: (_req, _file, cb) => {
+        const dir = TMP_DIR();
+        fs.mkdirSync(dir, { recursive: true });
+        cb(null, dir);
+      },
+      filename: (_req, _file, cb) => cb(null, `upload-${randomUUID()}.csv`),
+    }),
+    // Applies to THIS route only — the global express.json limit stays 1 MB.
+    limits: { fileSize: MAX_UPLOAD_BYTES(), files: 1 },
+    fileFilter: (_req, file, cb) => {
+      const ok = /\.csv$/i.test(file.originalname) ||
+        ["text/csv", "application/csv", "text/plain", "application/vnd.ms-excel"]
+          .includes(file.mimetype);
+      cb(ok ? null : new BadRequestException({
+        code: "not_a_csv",
+        detail: `Expected a .csv file, got "${file.originalname}" (${file.mimetype}). ` +
+          `In Excel use File → Save As → CSV UTF-8.`,
+      }), ok);
+    },
+  }))
+  async upload(@Req() req: Request, @Param("kind") kind: string,
+               @UploadedFile() file: Express.Multer.File,
+               @Query("dry_run") dryRunQuery?: string,
+               @Body("dry_run") dryRunBody?: string) {
+    const k = assertKind(kind);
+    const p = req.principal!;
+    try {
+      this.assertKindPermission(k, p.perms);
+    } catch (e) {
+      if (file?.path) fs.rmSync(file.path, { force: true });
+      throw e;
+    }
+    if (!file) {
+      throw new UnprocessableEntityException({
+        code: "no_file", detail: "Attach the CSV as the 'file' field of a multipart form.",
+      });
+    }
+    const dryRun = String(dryRunQuery ?? dryRunBody ?? "false") === "true";
+
+    // Validate the header NOW so a wrong file fails in a second rather than
+    // after a background job has churned through it.
+    try {
+      const head = fs.readFileSync(file.path, "utf8").slice(0, 64 * 1024);
+      parseImportCsv(k, head.includes("\n") ? head.slice(0, head.lastIndexOf("\n")) : head);
+    } catch (e) {
+      fs.rmSync(file.path, { force: true });
+      if (e instanceof ImportShapeError) {
+        throw new UnprocessableEntityException({ code: e.code, detail: e.message });
+      }
+      throw e;
+    }
+
+    const [job] = await withActor(this.db, { userId: p.userId, role: p.activeRole }, async (tx) => {
+      const rows = await tx.insert(importJobs).values({
+        kind: k, dryRun, state: "pending", requestedBy: p.userId, actorRole: p.activeRole,
+        filename: path.basename(file.originalname).slice(0, 200),
+        sourcePath: path.resolve(file.path),
+        byteSize: file.size,
+      }).returning();
+      await insertAudit(tx, {
+        actorUserId: p.userId, action: "import.queued", entityType: "import_job",
+        entityId: rows[0].id,
+        after: { kind: k, dryRun, filename: file.originalname, bytes: file.size }, ip: req.ip,
+      });
+      return rows;
+    });
+
+    // In-process worker (dev/single node) runs jobs itself; when the worker is
+    // a separate process it will pick this up on its next poll.
+    if (process.env.WORKER_INPROC !== "false") {
+      void runJob(this.db, job.id, "api-inproc").catch((err) =>
+        console.error("[import] inline job failed", err));
+    }
+
+    return {
+      job_id: job.id, state: "pending", kind: k, dry_run: dryRun,
+      filename: job.filename, bytes: file.size,
+      poll: `/api/v1/import/jobs/${job.id}`,
+    };
+  }
+
+  /** Progress + results for one job (the admin page polls this). */
+  @Get("import/jobs/:id")
+  @Perm("directory:read")
+  async job(@Req() req: Request, @Param("id") id: string) {
+    const p = req.principal!;
+    return withActor(this.db, { userId: p.userId, role: p.activeRole }, async (tx) => {
+      const [row] = await tx.select().from(importJobs).where(eq(importJobs.id, id)).limit(1);
+      if (!row) throw new NotFoundException({ code: "not_found" });
+      return toJobView(row);
+    });
+  }
+
+  /** Recent jobs, so an admin can see what has been imported and by whom. */
+  @Get("import/jobs")
+  @Perm("directory:read")
+  async jobs(@Req() req: Request, @Query("limit") limit?: string) {
+    const p = req.principal!;
+    const n = Math.min(Math.max(Number(limit) || 20, 1), 100);
+    return withActor(this.db, { userId: p.userId, role: p.activeRole }, async (tx) => {
+      const rows = await tx.select().from(importJobs)
+        .orderBy(desc(importJobs.createdAt)).limit(n);
+      return { data: rows.map(toJobView) };
+    });
+  }
+
+  /**
+   * Problem rows as a CSV the registrar can open in Excel, fix, and re-upload.
+   * A 6,000-row file with 400 bad rows is unusable as an HTML table.
+   */
+  @Get("import/jobs/:id/errors.csv")
+  @Perm("directory:read")
+  @Header("content-type", "text/csv; charset=utf-8")
+  async errorsCsv(@Req() req: Request, @Param("id") id: string,
+                  @Res({ passthrough: true }) res: Response) {
+    const p = req.principal!;
+    const row = await withActor(this.db, { userId: p.userId, role: p.activeRole }, async (tx) => {
+      const [r] = await tx.select().from(importJobs).where(eq(importJobs.id, id)).limit(1);
+      return r;
+    });
+    if (!row) throw new NotFoundException({ code: "not_found" });
+    res.setHeader("content-disposition", `attachment; filename="import-${row.kind}-problems.csv"`);
+    let out = toCsvRow(["row", "status", "problems"]);
+    for (const pr of (row.problems ?? []) as RowResult[]) {
+      out += toCsvRow([pr.row, pr.status, (pr.errors ?? []).join("; ")]);
+    }
+    return out;
+  }
+
+  /**
+   * One-time download of generated set-password links (only produced when SMTP
+   * is unconfigured). Reading them clears them: they are credentials, and a job
+   * row is not the right place to keep them.
+   */
+  @Get("import/jobs/:id/credentials.csv")
+  @Perm("directory:write")
+  @Header("content-type", "text/csv; charset=utf-8")
+  async credentialsCsv(@Req() req: Request, @Param("id") id: string,
+                       @Res({ passthrough: true }) res: Response) {
+    const p = req.principal!;
+    return withActor(this.db, SERVICE, async (tx) => {
+      const [row] = await tx.select().from(importJobs).where(eq(importJobs.id, id)).limit(1);
+      if (!row) throw new NotFoundException({ code: "not_found" });
+      const secrets = (row.secrets ?? []) as { row: number; url: string }[];
+      res.setHeader("content-disposition", `attachment; filename="set-password-links.csv"`);
+      let out = toCsvRow(["row", "set_password_url"]);
+      for (const s of secrets) out += toCsvRow([s.row, s.url]);
+      // Shown once, then wiped.
+      await tx.update(importJobs).set({ secrets: [] as any }).where(eq(importJobs.id, id));
+      await insertAudit(tx, {
+        actorUserId: p.userId, action: "import.credentials_downloaded",
+        entityType: "import_job", entityId: id, after: { count: secrets.length }, ip: req.ip,
+      });
+      return out;
+    });
+  }
+
+  /** Cancel a job that has not started (or stop one that is running). */
+  @Post("import/jobs/:id/cancel")
+  @Perm("directory:write")
+  async cancel(@Req() req: Request, @Param("id") id: string) {
+    const p = req.principal!;
+    return withActor(this.db, SERVICE, async (tx) => {
+      const [row] = await tx.select().from(importJobs).where(eq(importJobs.id, id)).limit(1);
+      if (!row) throw new NotFoundException({ code: "not_found" });
+      if (!["pending", "running"].includes(row.state)) {
+        throw new UnprocessableEntityException({
+          code: "not_cancellable", detail: `job is already ${row.state}`,
+        });
+      }
+      await tx.update(importJobs)
+        .set({ state: "cancelled", finishedAt: new Date(), lockedBy: null, lockedAt: null,
+               sourcePath: null })
+        .where(eq(importJobs.id, id));
+      // The parked upload is a roster: names, emails, admission numbers. A
+      // cancelled job used to leave it on disk forever.
+      if (row.sourcePath) { try { fs.rmSync(row.sourcePath, { force: true }); } catch { /* gone */ } }
+      await insertAudit(tx, {
+        actorUserId: p.userId, action: "import.cancelled", entityType: "import_job",
+        entityId: id, before: { state: row.state }, ip: req.ip,
+      });
+      // Rows already committed stay committed — re-running the corrected file
+      // is safe because every kind dedupes on its natural key.
+      return { ok: true, id, state: "cancelled", processed_rows: row.processedRows };
+    });
+  }
+
+  /** per-kind capability, the same rule the @Perm decorator enforces */
+  private assertKindPermission(kind: ImportKind, perms: string[]) {
+    const perm = (kind === "sections" || kind === "enrollments") ? "academics:write" : "directory:write";
+    if (!perms.includes(perm)) {
+      throw new ForbiddenException({ code: "missing_capability", detail: `requires ${perm}` });
+    }
   }
 }

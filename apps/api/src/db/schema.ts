@@ -412,6 +412,32 @@ export const busStops = pgTable("bus_stops", {
   seq: smallint("seq").notNull().default(0),
 });
 
+/** 0010: asynchronous roster import jobs (school-scale CSV files). */
+export const importJobs = pgTable("import_jobs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  kind: text("kind").notNull(),
+  dryRun: boolean("dry_run").notNull().default(false),
+  state: text("state").notNull().default("pending"),
+  requestedBy: uuid("requested_by").notNull(),
+  actorRole: text("actor_role").notNull(),
+  filename: text("filename"),
+  sourcePath: text("source_path"),
+  byteSize: bigint("byte_size", { mode: "number" }),
+  totalRows: integer("total_rows").notNull().default(0),
+  processedRows: integer("processed_rows").notNull().default(0),
+  createdCount: integer("created_count").notNull().default(0),
+  duplicateCount: integer("duplicate_count").notNull().default(0),
+  errorCount: integer("error_count").notNull().default(0),
+  problems: jsonb("problems").notNull().default([]),
+  secrets: jsonb("secrets").notNull().default([]),
+  errorMessage: text("error_message"),
+  lockedBy: text("locked_by"),
+  lockedAt: timestamp("locked_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  startedAt: timestamp("started_at", { withTimezone: true }),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+});
+
 export const transportAssignments = pgTable("transport_assignments", {
   id: uuid("id").primaryKey().defaultRandom(),
   studentUserId: uuid("student_user_id").notNull(),

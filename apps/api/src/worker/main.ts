@@ -9,6 +9,7 @@
 import { createDbFromEnv } from "../db/client";
 import { runMigrations } from "../db/migrate";
 import { startWorker } from "../notify/notify.service";
+import { startImportWorker } from "../import/import.jobs";
 import { createMailer, mailConfigured, verifyMailer } from "../notify/mailer";
 
 async function main() {
@@ -35,6 +36,9 @@ async function main() {
 
   const intervalMs = Number(process.env.WORKER_INTERVAL_MS ?? 5000);
   console.log(`[worker] started (interval ${intervalMs}ms, db=${kind})`);
+  // Roster imports are heavy and long-running; they get their own loop so a
+  // 6,000-row enrolments file never stalls outbox delivery.
+  startImportWorker(db);
   startWorker(db, {
     mailer,
     intervalMs,
