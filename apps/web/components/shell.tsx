@@ -16,6 +16,7 @@ const TABS: Record<string, { href: string; label: string }[]> = {
     { href: "/admin/transport", label: "Transport" },
     { href: "/admin/import", label: "Import" },
     { href: "/admin/reports", label: "Reports" },
+    { href: "/admin/notifications", label: "Email" },
     { href: "/admin/school", label: "School" },
   ],
   teacher: [

@@ -4,9 +4,9 @@ import { useRouter } from "next/navigation";
 import { api } from "@/lib/client";
 import { ROLE_HOME } from "@/lib/roles";
 
-export default function MfaForm({ activeRole }: { activeRole: string }) {
+export default function MfaForm({ activeRole, initialToken = "" }: { activeRole: string; initialToken?: string }) {
   const [code, setCode] = useState("");
-  const [token, setToken] = useState("");
+  const [token, setToken] = useState(initialToken);
   const [secret, setSecret] = useState<string | null>(null);
   const [err, setErr] = useState("");
   const [info, setInfo] = useState("");

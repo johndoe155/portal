@@ -9,6 +9,7 @@
 import { createDbFromEnv } from "../db/client";
 import { runMigrations } from "../db/migrate";
 import { startWorker } from "../notify/notify.service";
+import { createMailer, mailConfigured, verifyMailer } from "../notify/mailer";
 
 async function main() {
   // Production: DATABASE_URL → node-postgres (Neon/Supabase/RDS).
@@ -19,9 +20,23 @@ async function main() {
     console.warn("[worker] no DATABASE_URL or PGLITE_DATA_DIR — running against an empty in-memory DB");
   }
   await runMigrations(runner);
+
+  // Fail loudly at deploy time, not at 2am. createMailer() throws outright in
+  // production when SMTP_URL is missing, so the worker will not start pretending
+  // to deliver mail into a JSON sink.
+  const mailer = createMailer();
+  if (mailConfigured()) {
+    const { ok, error } = await verifyMailer(mailer);
+    console[ok ? "log" : "error"](ok ? "[worker] SMTP connection verified"
+      : `[worker] SMTP verification FAILED: ${error} — email delivery will not work`);
+  } else {
+    console.warn("[worker] SMTP_URL not set — emails go to the dev sink and are NOT delivered");
+  }
+
   const intervalMs = Number(process.env.WORKER_INTERVAL_MS ?? 5000);
   console.log(`[worker] started (interval ${intervalMs}ms, db=${kind})`);
   startWorker(db, {
+    mailer,
     intervalMs,
     pushSinkFile: process.env.PUSH_SINK_FILE ?? "data/push-outbox.jsonl",
     vapid: process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY

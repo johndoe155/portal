@@ -322,11 +322,18 @@ export const notifications = pgTable("notifications", {
   channel: text("channel").notNull(),
   kind: text("kind").notNull(),
   payload: jsonb("payload").notNull().default({}),
+  /** queued → sent | failed (permanent) | dead (retries exhausted) */
   status: text("status").notNull().default("queued"),
   attempts: smallint("attempts").notNull().default(0),
   lastError: text("last_error"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   sentAt: timestamp("sent_at", { withTimezone: true }),
+  /* 0009 go-live: retry with backoff instead of failing forever */
+  nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull().defaultNow(),
+  lockedAt: timestamp("locked_at", { withTimezone: true }),
+  lockedBy: text("locked_by"),
+  failedPermanently: boolean("failed_permanently").notNull().default(false),
+  lastAttemptAt: timestamp("last_attempt_at", { withTimezone: true }),
 });
 
 export const pushSubscriptions = pgTable("push_subscriptions", {
