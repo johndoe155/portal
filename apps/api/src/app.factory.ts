@@ -46,7 +46,7 @@ export async function createApp(db: Db) {
   // dev/single-node: outbox worker runs in-process (unref'd interval).
   // production: WORKER_INPROC=false + `npm run worker` beside real Postgres.
   if (process.env.WORKER_INPROC !== "false") {
-    const stop = startWorker(db, { pushSinkFile: process.env.PUSH_SINK_FILE ?? "data/push-outbox.jsonl" });
+    const stop = startWorker(db);
     // The retention purge rides along in single-node deployments; with a
     // separate worker process it lives there instead.
     const stopRetention = startRetentionLoop(db);

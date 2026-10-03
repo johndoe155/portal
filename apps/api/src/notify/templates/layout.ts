@@ -105,8 +105,14 @@ export function renderLayout(args: {
   blocks: Block[];
   /** Why this person is receiving the mail — required by anti-spam good practice. */
   reason: string;
+  /**
+   * Preferences page for this recipient (bulk mail only). A List-Unsubscribe
+   * header alone is invisible to anyone not using Gmail or Apple Mail, so the
+   * footer carries a link a human can actually see and click.
+   */
+  manageUrl?: string;
 }): { text: string; html: string } {
-  const { brand, heading, greeting, blocks, reason } = args;
+  const { brand, heading, greeting, blocks, reason, manageUrl } = args;
   const accent = /^#[0-9a-f]{3,8}$/i.test(brand.primaryColor) ? brand.primaryColor : "#1d4ed8";
 
   /* ── plain text ──────────────────────────────────────────────────────── */
@@ -131,6 +137,8 @@ export function renderLayout(args: {
   textParts.push("--");
   textParts.push(brand.schoolName);
   textParts.push(reason);
+  const manage = safeUrl(manageUrl);
+  if (manage) textParts.push(`Change which emails you receive: ${manage}`);
   if (brand.contactEmail) textParts.push(`Questions? ${brand.contactEmail}`);
   textParts.push("This mailbox is not monitored for replies.");
   const text = textParts.join("\n").replace(/\n{3,}/g, "\n\n").trim() + "\n";
@@ -203,6 +211,9 @@ ${body.join("\n")}
 <tr><td style="padding:16px 24px 24px;border-top:1px solid #e5e7eb;">
 <p style="margin:0 0 6px;font-size:13px;color:#6b7280;">${esc(brand.schoolName)}</p>
 <p style="margin:0 0 6px;font-size:12px;line-height:1.5;color:#9ca3af;">${esc(reason)}</p>
+${manage
+    ? `<p style="margin:0 0 6px;font-size:12px;color:#9ca3af;"><a href="${esc(manage)}" style="color:#6b7280;">Change which emails you receive</a></p>`
+    : ``}
 ${brand.contactEmail
     ? `<p style="margin:0;font-size:12px;color:#9ca3af;">Questions? <a href="mailto:${esc(brand.contactEmail)}" style="color:#6b7280;">${esc(brand.contactEmail)}</a> — this mailbox is not monitored for replies.</p>`
     : `<p style="margin:0;font-size:12px;color:#9ca3af;">This mailbox is not monitored for replies.</p>`}

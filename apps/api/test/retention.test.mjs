@@ -29,7 +29,7 @@ const {
 } = require("../dist/retention/retention.service.js");
 const {
   users, userRoles, sessions, notifications, passwordResetTokens, userInvites,
-  mfaEnrollTokens, idempotencyKeys, pushSubscriptions, importJobs, retentionRuns,
+  mfaEnrollTokens, idempotencyKeys, importJobs, retentionRuns,
   identities, mfaFactors, grades, feeInvoices, auditLog, students,
 } = require("../dist/db/schema.js");
 const { eq, sql, and, desc } = require("drizzle-orm");
@@ -89,9 +89,6 @@ async function makeSubject(email, roleCode = "teacher") {
     });
     await tx.insert(mfaFactors).values({
       id: randomUUID(), userId: id, kind: "totp", label: "phone", secretEnc: "x",
-    });
-    await tx.insert(pushSubscriptions).values({
-      id: randomUUID(), userId: id, endpoint: `https://push.example/${id}`,
     });
     await tx.insert(notifications).values({
       id: randomUUID(), recipientUserId: id, channel: "email", kind: "test", status: "queued",
@@ -204,26 +201,6 @@ test("spent credentials are purged; live ones survive", async () => {
   assert.equal(await countOf(userInvites, eq(userInvites.id, liveInvite)), 1);
   assert.equal(await countOf(mfaEnrollTokens, eq(mfaEnrollTokens.id, usedEnroll)), 0);
   assert.ok(res.counts.idempotencyKeys >= 1);
-});
-
-test("push subscriptions are retired only after sustained failure", async () => {
-  const uid = await uidOf("t1@school.example");
-  const dead = randomUUID(), flaky = randomUUID(), recovered = randomUUID();
-  await withActor(db, SERVICE, (tx) => tx.insert(pushSubscriptions).values([
-    { id: dead, userId: uid, endpoint: `https://p/${dead}`, failureCount: 9, lastFailureAt: ago(120) },
-    // Failing, but only recently — one bad night must not unsubscribe anyone.
-    { id: flaky, userId: uid, endpoint: `https://p/${flaky}`, failureCount: 9, lastFailureAt: ago(2) },
-    // Old failures, but it has worked since.
-    { id: recovered, userId: uid, endpoint: `https://p/${recovered}`, failureCount: 9,
-      lastFailureAt: ago(200), lastSuccessAt: ago(1) },
-  ]));
-
-  await runRetention(db, { trigger: "test" });
-
-  assert.equal(await countOf(pushSubscriptions, eq(pushSubscriptions.id, dead)), 0);
-  assert.equal(await countOf(pushSubscriptions, eq(pushSubscriptions.id, flaky)), 1);
-  assert.equal(await countOf(pushSubscriptions, eq(pushSubscriptions.id, recovered)), 1,
-    "a subscription that has delivered since its failures is alive");
 });
 
 test("finished import jobs are purged — they hold whole uploaded rosters", async () => {
@@ -388,7 +365,6 @@ test("erasure removes identity and leaves statutory records standing", async () 
   // Everything identifying is gone.
   assert.equal(await countOf(identities, eq(identities.userId, id)), 0);
   assert.equal(await countOf(mfaFactors, eq(mfaFactors.userId, id)), 0);
-  assert.equal(await countOf(pushSubscriptions, eq(pushSubscriptions.userId, id)), 0);
   assert.equal(await countOf(notifications, eq(notifications.recipientUserId, id)), 0);
 
   // Sessions revoked, roles revoked — access ends immediately.

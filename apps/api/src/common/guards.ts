@@ -15,8 +15,12 @@ export const ParentWrite = () => SetMetadata(PARENT_WRITE_KEY, true);
 
 const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
-/** Double-submit CSRF on mutations (Phase 3 §1.1). /auth/* exempt (rate-limited);
- *  /webhooks/* exempt — gateway callbacks carry their own HMAC signature instead. */
+/**
+ * Double-submit CSRF on mutations (Phase 3 §1.1). /auth/* exempt
+ * (rate-limited); /webhooks/* exempt — gateway callbacks carry their own HMAC
+ * signature instead, as does the RFC 8058 one-click unsubscribe, which a mail
+ * client POSTs with no cookies at all.
+ */
 @Injectable()
 export class CsrfGuard implements CanActivate {
   canActivate(ctx: ExecutionContext): boolean {
@@ -24,6 +28,7 @@ export class CsrfGuard implements CanActivate {
     if (!MUTATING.has(req.method as string)) return true;
     const path = req.path as string;
     if (path.startsWith("/api/v1/auth") || path.startsWith("/api/v1/webhooks")) return true;
+    if (path === "/api/v1/notifications/unsubscribe") return true;
     const header = req.headers["x-csrf"];
     const cookie = req.cookies?.[config.csrfCookie];
     if (!header || !cookie || header !== cookie) {

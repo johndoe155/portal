@@ -4,11 +4,12 @@ import { and, asc, eq, inArray, isNotNull, lte, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
 import { withActor, SERVICE } from "../db/actor";
 import {
-  notifications, pushSubscriptions, users, guardians, schoolSettings,
+  notifications, users, guardians, schoolSettings,
   courseSections, courses, messageThreads,
 } from "../db/schema";
 import { encryptText, decryptText } from "../crypto/enc";
 import { config } from "../config";
+import { getPrefs, isOptional, unsubscribeUrl, wantsKind } from "./preferences";
 import {
   createMailer, isPermanentFailure, mailConfigured, resolveFrom, verifyMailer,
   PermanentMailError,
@@ -54,13 +55,29 @@ export function decryptPayload(kind: string, payload: Record<string, unknown>): 
   return payload;
 }
 
-export function enqueue(tx: Db, row: EnqueueRow) {
+/**
+ * Queue one notification.
+ *
+ * The opt-out check lives HERE rather than in each producer, so a new caller
+ * cannot accidentally bypass a recipient's preferences. Suppression happens at
+ * enqueue time, not send time: an opted-out recipient should never produce an
+ * outbox row at all, otherwise the admin dead-letter screen fills with mail
+ * nobody intended to send.
+ *
+ * Only the four bulk categories are opt-outable (see OPTIONAL_KINDS). Password
+ * resets, invitations, MFA enrolment and deactivation notices always send.
+ */
+export async function enqueue(tx: Db, row: EnqueueRow) {
+  if (row.recipientUserId && isOptional(row.kind)
+      && !wantsKind(await getPrefs(tx, row.recipientUserId), row.kind)) {
+    return;
+  }
   // no .returning(): under RLS, RETURNING re-checks the SELECT policy, and a
   // teacher enqueueing for a guardian cannot read that recipient's inbox row.
   const stored = SENSITIVE_KINDS.has(row.kind)
     ? { ...row, payload: encryptPayload(row.payload) }
     : row;
-  return tx.insert(notifications).values(stored as any);
+  await tx.insert(notifications).values(stored as any);
 }
 
 /** verified, active guardians of a student (user ids) */
@@ -82,12 +99,11 @@ export async function enqueueGradeReleased(tx: Db, sectionId: string, studentIds
   }
 }
 
-/** absence recorded → guardians get email + push (instant alert) */
+/** absence recorded → guardians get an email */
 export async function enqueueAbsence(tx: Db, studentUserId: string, date: string, sectionId: string) {
   const payload = { student_user_id: studentUserId, date, section_id: sectionId };
   for (const gid of await guardianIdsOf(tx, studentUserId)) {
     await enqueue(tx, { recipientUserId: gid, channel: "email", kind: "absence_recorded", payload });
-    await enqueue(tx, { recipientUserId: gid, channel: "push", kind: "absence_recorded", payload });
   }
 }
 
@@ -126,32 +142,9 @@ export function nextAttemptDelayMs(attempt: number): number {
 
 export interface WorkerOpts {
   mailer?: Transporter | { sendMail(opts: any): Promise<any> };
-  pushSinkFile?: string;          // dev: append web-push payloads here instead of sending
-  vapid?: { publicKey: string; privateKey: string; subject: string };
   fromAddress?: string;
   /** identifies this worker in notifications.locked_by (diagnostics) */
   workerId?: string;
-}
-
-async function deliverPush(sub: { endpoint: string; p256dh: string | null; authKey: string | null },
-                           notif: { kind: string; payload: unknown }, opts: WorkerOpts): Promise<string> {
-  if (opts.vapid && sub.p256dh && sub.authKey) {
-    // production path: web-push with VAPID (Phase-1 stack); lazily required so dev has no dep on it
-    const webpush = await import("web-push").then((m) => m.default ?? m);
-    webpush.setVapidDetails(opts.vapid.subject, opts.vapid.publicKey, opts.vapid.privateKey);
-    await webpush.sendNotification(
-      { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.authKey } },
-      JSON.stringify(notif));
-    return "web-push";
-  }
-  // dev sink: record the exact payload that would go over the wire
-  const fs = await import("node:fs");
-  const path = await import("node:path");
-  const file = opts.pushSinkFile ?? "data/push-outbox.jsonl";
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.appendFileSync(file,
-    JSON.stringify({ at: new Date().toISOString(), endpoint: sub.endpoint, ...notif }) + "\n");
-  return "dev-sink";
 }
 
 /** The school identity every email is branded with. */
@@ -274,9 +267,17 @@ export async function processQueue(db: Db, opts: WorkerOpts = {}, limit = Number
     try {
       if (row.channel === "email") {
         if (!row.toEmail) throw new PermanentMailError("recipient not found");
+        // One-click unsubscribe is per (recipient, category), so the links
+        // can only be minted here, once the row's recipient is known.
+        const unsub = row.recipientUserId && isOptional(row.kind)
+          ? {
+              oneClickUrl: unsubscribeUrl(row.recipientUserId, row.kind),
+              managePrefsUrl: `${claim.brand.webOrigin}/account/notifications`,
+            }
+          : undefined;
         const rendered = renderEmail(row.kind, row.payload, {
           brand: claim.brand, recipientName: row.toName,
-          timezone: claim.timezone, resolved: row.resolved,
+          timezone: claim.timezone, resolved: row.resolved, unsub,
         });
         await mailer.sendMail({
           from: opts.fromAddress ?? claim.from,
@@ -288,29 +289,11 @@ export async function processQueue(db: Db, opts: WorkerOpts = {}, limit = Number
           ...(process.env.MAIL_REPLY_TO ? { replyTo: process.env.MAIL_REPLY_TO } : {}),
         });
       } else {
-        const subs = await withActor(db, SERVICE, (tx) =>
-          tx.select().from(pushSubscriptions)
-            .where(eq(pushSubscriptions.userId, row.recipientUserId!)));
-        // A user with no subscription will not gain one by us retrying this
-        // specific row; a future event will enqueue a fresh one.
-        if (subs.length === 0) throw new PermanentMailError("no push subscription");
-        for (const s of subs) {
-          // Track per-subscription outcomes so retention can retire endpoints
-          // the browser has permanently stopped accepting, instead of pushing
-          // at a dead URL forever.
-          try {
-            await deliverPush({ endpoint: s.endpoint, p256dh: s.p256dh, authKey: s.authKey },
-              { kind: row.kind, payload: row.payload }, opts);
-            await withActor(db, SERVICE, (tx) => tx.update(pushSubscriptions)
-              .set({ failureCount: 0, lastSuccessAt: new Date() })
-              .where(eq(pushSubscriptions.id, s.id)));
-          } catch (pushErr) {
-            await withActor(db, SERVICE, (tx) => tx.update(pushSubscriptions)
-              .set({ failureCount: sql`${pushSubscriptions.failureCount} + 1`, lastFailureAt: new Date() })
-              .where(eq(pushSubscriptions.id, s.id)));
-            throw pushErr;
-          }
-        }
+        // Email is the only channel the portal actually delivers. Anything
+        // else reaching the worker is a bug in a producer, and must dead-letter
+        // loudly rather than be marked "sent" with nothing having happened —
+        // which is exactly what the old half-built push channel did.
+        throw new PermanentMailError(`unsupported channel "${row.channel}"`);
       }
       outcomes.push({ id: row.id, attempts, ok: true, permanent: false });
     } catch (err: any) {

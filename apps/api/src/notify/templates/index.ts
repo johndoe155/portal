@@ -26,6 +26,8 @@ export interface RenderContext {
   brand: BrandContext;
   recipientName: string;
   timezone: string;
+  /** Per-recipient unsubscribe links, for bulk mail only. */
+  unsub?: UnsubContext;
   /** Resolved display names, best-effort — templates degrade gracefully. */
   resolved?: {
     studentName?: string | null;
@@ -35,21 +37,48 @@ export interface RenderContext {
   };
 }
 
-/** Headers applied to every automated message (RFC 3834 + bulk-mail hygiene). */
-function baseHeaders(brand: BrandContext, bulk: boolean): Record<string, string> {
+/**
+ * Headers applied to every automated message (RFC 3834 + bulk-mail hygiene).
+ *
+ * `bulk` messages carry an unsubscribe affordance; security mail (resets,
+ * invites, MFA, deactivation) deliberately does not — you cannot opt out of
+ * being told your password changed.
+ *
+ * This used to advertise `<ORIGIN/account/notifications>`, which was a 404.
+ * Gmail and Yahoo's bulk-sender rules require a working one-click
+ * unsubscribe, so the URL is now an RFC 8058 POST endpoint carrying its own
+ * HMAC (a mail client sends no cookies), paired with a mailto: fallback and
+ * the real preferences page for humans.
+ */
+function baseHeaders(
+  brand: BrandContext, bulk: boolean, unsub?: UnsubContext,
+): Record<string, string> {
   const h: Record<string, string> = { "Auto-Submitted": "auto-generated" };
   if (bulk) {
-    // Digests and alerts are preference-driven, so they carry an unsubscribe
-    // affordance. Security mail (resets, invites, MFA) deliberately does not:
-    // you cannot opt out of being told your password changed.
-    h["List-Unsubscribe"] = `<${brand.webOrigin}/account/notifications>`;
     h["X-Auto-Response-Suppress"] = "OOF, AutoReply";
+    const targets: string[] = [];
+    if (unsub?.oneClickUrl) targets.push(`<${unsub.oneClickUrl}>`);
+    const mailbox = brand.contactEmail ?? brand.dpoEmail;
+    if (mailbox) targets.push(`<mailto:${mailbox}?subject=unsubscribe>`);
+    if (targets.length) {
+      h["List-Unsubscribe"] = targets.join(", ");
+      if (unsub?.oneClickUrl) h["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click";
+    }
   }
   return h;
 }
 
+/** Per-recipient unsubscribe details, resolved by the sender. */
+export interface UnsubContext {
+  /** RFC 8058 one-click URL — no session required. */
+  oneClickUrl?: string;
+  /** Human-facing preferences page. */
+  managePrefsUrl?: string;
+}
+
 export function renderEmail(kind: string, payload: Record<string, unknown>, ctx: RenderContext): RenderedEmail {
   const { brand, recipientName } = ctx;
+  const unsub = ctx.unsub;
   const school = brand.schoolName;
   const r = ctx.resolved ?? {};
 
@@ -170,6 +199,7 @@ export function renderEmail(kind: string, payload: Record<string, unknown>, ctx:
         ...renderLayout({
           brand, heading: "Absence recorded", greeting: recipientName,
           reason: `You received this because you are a registered guardian at ${school}.`,
+          manageUrl: unsub?.managePrefsUrl,
           blocks: [
             {
               p: where
@@ -180,7 +210,7 @@ export function renderEmail(kind: string, payload: Record<string, unknown>, ctx:
             { button: { label: "View attendance", url: `${brand.webOrigin}/parent` } },
           ],
         }),
-        headers: baseHeaders(brand, true),
+        headers: baseHeaders(brand, true, unsub),
       };
     }
 
@@ -192,13 +222,14 @@ export function renderEmail(kind: string, payload: Record<string, unknown>, ctx:
         ...renderLayout({
           brand, heading: "New grades published", greeting: recipientName,
           reason: `You received this because you follow this pupil's progress at ${school}.`,
+          manageUrl: unsub?.managePrefsUrl,
           blocks: [
             { p: where ? `New grades for ${where} were published on ${when}.` : `New grades were published on ${when}.` },
             { button: { label: "View grades", url: `${brand.webOrigin}/` } },
             { note: "Grades are provisional until the end-of-term report card is issued." },
           ],
         }),
-        headers: baseHeaders(brand, true),
+        headers: baseHeaders(brand, true, unsub),
       };
     }
 
@@ -211,13 +242,14 @@ export function renderEmail(kind: string, payload: Record<string, unknown>, ctx:
         ...renderLayout({
           brand, heading: "You have a new message", greeting: recipientName,
           reason: `You received this because you are a registered guardian at ${school}.`,
+          manageUrl: unsub?.managePrefsUrl,
           blocks: [
             { p: subject ? `A member of staff has sent you a message: "${subject}".` : "A member of staff has sent you a message on the school portal." },
             { p: "For your privacy, the message itself is only readable in the portal." },
             { button: { label: "Read the message", url } },
           ],
         }),
-        headers: baseHeaders(brand, true),
+        headers: baseHeaders(brand, true, unsub),
       };
     }
 
@@ -233,13 +265,14 @@ export function renderEmail(kind: string, payload: Record<string, unknown>, ctx:
         ...renderLayout({
           brand, heading: "Your daily summary", greeting: recipientName,
           reason: `You received this because daily summaries are enabled for your ${school} account.`,
+          manageUrl: unsub?.managePrefsUrl,
           blocks: [
             { p: `Here's what happened on ${when}:` },
             { list: items.length ? items : ["No new activity."] },
             { button: { label: "Open the portal", url: brand.webOrigin } },
           ],
         }),
-        headers: baseHeaders(brand, true),
+        headers: baseHeaders(brand, true, unsub),
       };
     }
 
@@ -253,12 +286,13 @@ export function renderEmail(kind: string, payload: Record<string, unknown>, ctx:
         ...renderLayout({
           brand, heading: `A notification from ${school}`, greeting: recipientName,
           reason: `You received this because you have a ${school} portal account.`,
+          manageUrl: unsub?.managePrefsUrl,
           blocks: [
             { p: "There is an update waiting for you on the school portal." },
             { button: { label: "Open the portal", url: brand.webOrigin } },
           ],
         }),
-        headers: baseHeaders(brand, true),
+        headers: baseHeaders(brand, true, unsub),
       };
     }
   }

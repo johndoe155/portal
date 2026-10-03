@@ -4,7 +4,7 @@ import { api } from "@/lib/client";
 
 interface Windows {
   notificationsDays: number; sessionsDays: number; tokensDays: number;
-  idempotencyDays: number; pushFailureDays: number; pushFailureCount: number;
+  idempotencyDays: number;
   importJobsDays: number; leaverAnonymiseDays: number;
 }
 interface Run {
@@ -29,7 +29,6 @@ const LABELS: Record<string, string> = {
   userInvites: "Spent invitations",
   mfaEnrollTokens: "Spent two-factor enrolment tokens",
   idempotencyKeys: "Replay-protection keys",
-  pushSubscriptions: "Dead push subscriptions",
   importJobs: "Finished import jobs (and their uploaded files)",
   leaversAnonymised: "Leavers anonymised",
 };
@@ -40,7 +39,6 @@ const WINDOW_ROWS: { key: keyof Windows; label: string; unit: string }[] = [
   { key: "tokensDays", label: "Spent reset / invite / enrolment tokens", unit: "days" },
   { key: "importJobsDays", label: "Finished import jobs and uploaded rosters", unit: "days" },
   { key: "idempotencyDays", label: "Replay-protection keys", unit: "days" },
-  { key: "pushFailureDays", label: "Push subscriptions after continuous failure", unit: "days" },
   { key: "leaverAnonymiseDays", label: "Anonymise leavers after", unit: "days" },
 ];
 
@@ -117,8 +115,6 @@ export default function RetentionPanel() {
                   {v === 0 && r.key === "leaverAnonymiseDays"
                     ? <span className="muted">off — not configured</span>
                     : `${v} ${r.unit}`}
-                  {r.key === "pushFailureDays" &&
-                    <span className="muted"> (and at least {st.windows.pushFailureCount} failures)</span>}
                 </td>
               </tr>
             );

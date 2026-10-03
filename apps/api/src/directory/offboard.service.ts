@@ -4,7 +4,7 @@ import type { Db } from "../db/client";
 import {
   users, userRoles, sessions, guardians, sectionStaff, courseSections, courses,
   messageThreads, passwordResetTokens, mfaEnrollTokens, userInvites,
-  pushSubscriptions, students, enrollments, feeInvoices, terms,
+  students, enrollments, feeInvoices, terms,
 } from "../db/schema";
 import { insertAudit } from "../common/audit";
 
@@ -24,8 +24,6 @@ import { insertAudit } from "../common/audit";
  *     restore exactly what was taken
  *   - pending invites, password-reset and MFA-enrol tokens consumed, so a
  *     link mailed last week cannot resurrect the account
- *   - push subscriptions deleted — their phone stops receiving school
- *     notifications the moment they leave
  *   - guardian links ended (both directions, as appropriate)
  *
  * What it deliberately does NOT do is reassign their teaching. That is a
@@ -196,7 +194,6 @@ export interface DeactivateResult {
     invitesCancelled: number;
     resetTokensVoided: number;
     enrollTokensVoided: number;
-    pushSubscriptionsRemoved: number;
     guardianLinksEnded: number;
   };
 }
@@ -240,11 +237,6 @@ export async function deactivateUser(
     .where(and(eq(mfaEnrollTokens.userId, targetId), isNull(mfaEnrollTokens.usedAt)))
     .returning({ id: mfaEnrollTokens.id });
 
-  // Their device should stop buzzing with school notifications today.
-  const pushes = await tx.delete(pushSubscriptions)
-    .where(eq(pushSubscriptions.userId, targetId))
-    .returning({ id: pushSubscriptions.id });
-
   let guardianLinksEnded = 0;
   if (opts.endGuardianLinks) {
     const ended = await tx.update(guardians).set({ endedAt: now })
@@ -274,7 +266,7 @@ export async function deactivateUser(
       status: mode, reason: opts.reason ?? null,
       sessionsRevoked: killed.length, invitesCancelled: invites.length,
       resetTokensVoided: resets.length, enrollTokensVoided: enrolTokens.length,
-      pushSubscriptionsRemoved: pushes.length, guardianLinksEnded,
+      guardianLinksEnded,
     },
   });
 
@@ -286,7 +278,6 @@ export async function deactivateUser(
       invitesCancelled: invites.length,
       resetTokensVoided: resets.length,
       enrollTokensVoided: enrolTokens.length,
-      pushSubscriptionsRemoved: pushes.length,
       guardianLinksEnded,
     },
   };

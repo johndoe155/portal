@@ -1,7 +1,7 @@
 import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
-import { existsSync, readFileSync, unlinkSync, mkdtempSync } from "node:fs";
+import { unlinkSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -41,7 +41,6 @@ const { startMockIdp } = await import("./mock-idp.mjs");
 let app, server, db, ids, idp;
 const jars = {};
 const tmp = mkdtempSync(join(tmpdir(), "portal53-"));
-const PUSH_SINK = join(tmp, "push-outbox.jsonl");
 
 function cookiesOf(res) {
   const out = {};
@@ -138,15 +137,17 @@ test("teacher message enqueues guardian notification", async () => {
 
 /* ── notification hooks ── */
 const date = new Date().toISOString().slice(0, 10);
-test("absence transition enqueues guardian email+push", async () => {
+test("absence transition enqueues a guardian email", async () => {
   const save = await request(server).post(`/api/v1/sections/${ids.sec1}/attendance`).set(auth("t1"))
     .set("idempotency-key", crypto.randomUUID())
     .send({ date, records: [{ student_user_id: ids.s1, status: "absent" }] });
   assert.equal(save.status, 201, JSON.stringify(save.body));
   const inbox = await request(server).get("/api/v1/notifications").set(auth("p1"));
   const alerts = inbox.body.data.filter((n) => n.kind === "absence_recorded");
-  assert.equal(alerts.length, 2); // email + push
-  assert.deepEqual(alerts.map((a) => a.channel).sort(), ["email", "push"]);
+  // Email only. Push used to be enqueued alongside it and silently written to
+  // a JSONL file on disk, then marked "sent" — see 0015_drop_push_subscriptions.
+  assert.equal(alerts.length, 1);
+  assert.deepEqual(alerts.map((a) => a.channel), ["email"]);
 });
 
 test("re-saving same absence does NOT re-alert; grade release notifies student+parent", async () => {
@@ -155,7 +156,7 @@ test("re-saving same absence does NOT re-alert; grade release notifies student+p
     .send({ date, records: [{ student_user_id: ids.s1, status: "absent" }] });
   assert.equal(again.status, 201);
   const inbox = await request(server).get("/api/v1/notifications").set(auth("p1"));
-  assert.equal(inbox.body.data.filter((n) => n.kind === "absence_recorded").length, 2, "no duplicate alert");
+  assert.equal(inbox.body.data.filter((n) => n.kind === "absence_recorded").length, 1, "no duplicate alert");
 
   const grade = await request(server).post(`/api/v1/sections/${ids.sec1}/grades/bulk`).set(auth("t1"))
     .set("idempotency-key", crypto.randomUUID())
@@ -192,29 +193,28 @@ test("review-3 #4: FAILED bulk save releases its idempotency key (retry works)",
 });
 
 /* ── worker ── */
-test("worker drains outbox: emails delivered, push sinks, failures recorded", async () => {
-  // give s1 a push subscription + a push notification to exercise the sink
-  await request(server).post("/api/v1/notifications/push").set(auth("s1"))
-    .send({ endpoint: "https://push.example/abc", keys: { p256dh: "pk", auth: "ak" } });
+test("worker drains outbox: emails delivered, unknown channels dead-letter", async () => {
+  // A row on a channel the portal cannot deliver must fail loudly. The old
+  // push path did the opposite: with no VAPID keys it appended the payload to
+  // a file and marked the notification sent, so the outbox screen showed
+  // "delivered" for an alert that reached nobody.
   await withActor(db, SERVICE, (tx) => tx.insert(notifications).values({
     recipientUserId: ids.s1, channel: "push", kind: "absence_recorded", payload: { test: true },
   }));
 
   const sentMails = [];
   const mailer = { sendMail: async (opts) => { sentMails.push(opts); return {}; } };
-  const r1 = await processQueue(db, { mailer, pushSinkFile: PUSH_SINK });
-  assert.ok(r1.processed >= 5, `processed ${r1.processed}`);
-  assert.ok(sentMails.length >= 4, `emails ${sentMails.length}`);
+  const r1 = await processQueue(db, { mailer });
+  assert.ok(r1.processed >= 3, `processed ${r1.processed}`);
+  assert.ok(sentMails.length >= 2, `emails ${sentMails.length}`);
   assert.ok(sentMails.some((m) => /Absence recorded/.test(m.subject)));
-  assert.ok(existsSync(PUSH_SINK), "push sink file written");
-  assert.match(readFileSync(PUSH_SINK, "utf8"), /push\.example/);
 
-  // p1's push row fails honestly (no subscription) and is marked failed
   const failed = await withActor(db, SERVICE, (tx) =>
     tx.select().from(notifications).where(eq(notifications.status, "failed")));
-  assert.ok(failed.length >= 1 && failed.every((f) => /no push subscription/.test(f.lastError)));
+  assert.ok(failed.length >= 1 && failed.every((f) => /unsupported channel/.test(f.lastError)),
+    "no silent success for a channel we do not deliver");
 
-  const r2 = await processQueue(db, { mailer, pushSinkFile: PUSH_SINK });
+  const r2 = await processQueue(db, { mailer });
   assert.equal(r2.processed, 0, "queue empty after drain");
 });
 
@@ -389,21 +389,6 @@ test("section create, enrollment, duplicate refusal, admission lookup", async ()
   const teacherDenied = await request(server).post("/api/v1/sections").set(auth("t1"))
     .send({ course_code: "X-1", course_title: "x", name: "x", term_id: ids.term });
   assert.equal(teacherDenied.status, 403); // teachers lack academics:write
-});
-
-/* ── push subscription lifecycle + parent guard ── */
-test("push subscribe/unsubscribe; parent blocked by read-only guard", async () => {
-  const sub = await request(server).post("/api/v1/notifications/push").set(auth("s1"))
-    .send({ endpoint: "https://push.example/s1-device", keys: { p256dh: "pk", auth: "ak" } });
-  assert.equal(sub.status, 201);
-  const un = await request(server).post(`/api/v1/notifications/push/${sub.body.id}/unsubscribe`).set(auth("s1"));
-  assert.equal(un.status, 201);
-  assert.equal(un.body.removed, 1);
-
-  const parentSub = await request(server).post("/api/v1/notifications/push").set(auth("p1"))
-    .send({ endpoint: "https://push.example/p1" });
-  assert.equal(parentSub.status, 403);
-  assert.equal(parentSub.body.code, "parent_read_only");
 });
 
 /* ── SSO (OIDC authorization-code via mock IdP) ── */

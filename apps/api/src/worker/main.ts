@@ -45,11 +45,6 @@ async function main() {
   startWorker(db, {
     mailer,
     intervalMs,
-    pushSinkFile: process.env.PUSH_SINK_FILE ?? "data/push-outbox.jsonl",
-    vapid: process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY
-      ? { publicKey: process.env.VAPID_PUBLIC_KEY, privateKey: process.env.VAPID_PRIVATE_KEY,
-          subject: process.env.VAPID_SUBJECT ?? "mailto:portal@school.example" }
-      : undefined,
   });
 }
 

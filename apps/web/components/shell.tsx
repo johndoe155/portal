@@ -72,6 +72,13 @@ export default function Shell({ session, children }: { session: SessionView; chi
         <span className="muted">{session.activeRole.replace("_", " ")}</span>
         <span className="spacer" />
         <span className="who">{session.displayName}</span>
+        {/* Account self-service. Both pages existed only as URLs before — the
+            email-preferences page in particular was linked from the
+            List-Unsubscribe header of every bulk message we send. */}
+        <Link className="btn ghost" href="/account/notifications"
+              style={{ minHeight: 36, padding: "4px 12px" }}>Emails</Link>
+        <Link className="btn ghost" href="/account/password"
+              style={{ minHeight: 36, padding: "4px 12px" }}>Password</Link>
         <button className="btn ghost" onClick={logout} style={{ minHeight: 36, padding: "4px 12px" }}>Sign out</button>
       </header>
       <div className="container">

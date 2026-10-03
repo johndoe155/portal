@@ -1,22 +1,24 @@
 import {
-  Body, Controller, Get, Inject, NotFoundException, Param, Post, Query, Req,
+  Body, Controller, Get, Inject, NotFoundException, Param, Post, Put, Query, Req,
   UnprocessableEntityException,
 } from "@nestjs/common";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
 import { DB_TOKEN } from "../db/token";
 import { withActor, SERVICE } from "../db/actor";
-import { notifications, pushSubscriptions, users } from "../db/schema";
+import { notifications, users } from "../db/schema";
 import { insertAudit } from "../common/audit";
-import { Perm } from "../common/guards";
+import { ParentWrite, Perm } from "../common/guards";
 import { outboxStats, requeueNotification } from "./notify.service";
-import { PushSubscribeBody } from "@portal/contracts";
+import {
+  KIND_LABELS, OPTIONAL_KINDS, getPrefs, normalisePrefs, verifyUnsubscribeToken, wantsKind,
+} from "./preferences";
+import { NotificationPrefsBody } from "@portal/contracts";
 import type { Request } from "express";
 
 /**
- * Own notification inbox (RLS: recipients only) + Web Push subscription
- * management. Note: parents are blocked from subscribing by the blanket
- * parent_read_only guard — guardians receive email alerts/digests instead.
+ * Own notification inbox (RLS: recipients only), the admin outbox, and the
+ * notification preferences behind every List-Unsubscribe header we send.
  */
 @Controller()
 export class NotifyController {
@@ -136,41 +138,102 @@ export class NotifyController {
     });
   }
 
-  @Post("notifications/push")
-  async subscribe(@Req() req: Request, @Body() body: unknown) {
-    const parsed = PushSubscribeBody.safeParse(body);
+  /* ── notification preferences ──────────────────────────────────────── */
+
+  /**
+   * What this recipient currently receives.
+   *
+   * Every bulk email has always carried `List-Unsubscribe:
+   * <ORIGIN/account/notifications>` — and that page did not exist. These
+   * routes, and the page that calls them, are what makes that promise true.
+   */
+  @Get("account/notifications")
+  async getPreferences(@Req() req: Request) {
+    const p = req.principal!;
+    const prefs = await withActor(this.db, SERVICE, (tx) => getPrefs(tx, p.userId));
+    return {
+      data: OPTIONAL_KINDS.map((kind) => ({
+        kind,
+        label: KIND_LABELS[kind].label,
+        detail: KIND_LABELS[kind].detail,
+        enabled: wantsKind(prefs, kind),
+      })),
+      note: "Security and account emails — password resets, invitations, "
+        + "two-factor set-up and account closures — are always sent.",
+    };
+  }
+
+  // Parents are read-only everywhere else, but muting your own absence
+  // alerts is the one write a guardian must be able to make — it is the
+  // whole point of the List-Unsubscribe header we put on their mail.
+  @Put("account/notifications")
+  @ParentWrite()
+  async setPreferences(@Req() req: Request, @Body() body: unknown) {
+    const parsed = NotificationPrefsBody.safeParse(body);
     if (!parsed.success) {
       throw new UnprocessableEntityException({ code: "validation", detail: parsed.error.message });
     }
     const p = req.principal!;
-    return withActor(this.db, { userId: p.userId, role: p.activeRole }, async (tx) => {
-      const [row] = await tx.insert(pushSubscriptions).values({
-        userId: p.userId,
-        endpoint: parsed.data.endpoint,
-        p256dh: parsed.data.keys?.p256dh ?? null,
-        authKey: parsed.data.keys?.auth ?? null,
-        userAgent: (req.headers["user-agent"] ?? "").slice(0, 300) || null,
-      }).onConflictDoUpdate({
-        target: pushSubscriptions.endpoint,
-        set: { p256dh: parsed.data.keys?.p256dh ?? null, authKey: parsed.data.keys?.auth ?? null },
-      }).returning();
-      await insertAudit(tx, { actorUserId: p.userId, action: "push.subscribed",
-        entityType: "push_subscription", entityId: row.id });
-      return row;
+    // SERVICE actor: `users` has no self-UPDATE policy, and widening it so
+    // people can edit their own row would expose far more than a preferences
+    // blob. The write is pinned to the caller's own id either way.
+    return withActor(this.db, SERVICE, async (tx) => {
+      const before = await getPrefs(tx, p.userId);
+      const next = { ...before, ...normalisePrefs(parsed.data) };
+      await tx.update(users).set({ notificationPrefs: next }).where(eq(users.id, p.userId));
+      await insertAudit(tx, {
+        actorUserId: p.userId, action: "notification.preferences_changed",
+        entityType: "user", entityId: p.userId, before, after: next, ip: req.ip,
+      });
+      return {
+        data: OPTIONAL_KINDS.map((kind) => ({
+          kind, label: KIND_LABELS[kind].label, detail: KIND_LABELS[kind].detail,
+          enabled: wantsKind(next, kind),
+        })),
+      };
     });
   }
 
-  @Post("notifications/push/:id/unsubscribe")
-  async unsubscribe(@Req() req: Request, @Param("id") id: string) {
-    const p = req.principal!;
-    return withActor(this.db, { userId: p.userId, role: p.activeRole }, async (tx) => {
-      const [row] = await tx.select().from(pushSubscriptions)
-        .where(and(eq(pushSubscriptions.id, id), eq(pushSubscriptions.userId, p.userId))).limit(1);
-      if (!row) return { ok: true, removed: 0 };
-      await tx.delete(pushSubscriptions).where(eq(pushSubscriptions.id, id));
-      await insertAudit(tx, { actorUserId: p.userId, action: "push.unsubscribed",
-        entityType: "push_subscription", entityId: id });
-      return { ok: true, removed: 1 };
+  /**
+   * RFC 8058 one-click unsubscribe.
+   *
+   * Gmail and Yahoo POST this URL directly from the mail client when the
+   * reader hits "Unsubscribe" — no cookies, no CSRF token, no session, and no
+   * confirmation page allowed. Authority therefore comes from the HMAC in the
+   * token, which is scoped to one recipient and one category.
+   *
+   * GET is accepted too: some clients and link-scanners follow the URL, and a
+   * reader who copies it into a browser should not meet an error.
+   */
+  @Post("notifications/unsubscribe")
+  @ParentWrite()
+  async oneClickUnsubscribe(@Query("t") token: string) {
+    return this.applyUnsubscribe(token);
+  }
+
+  @Get("notifications/unsubscribe")
+  async oneClickUnsubscribeGet(@Query("t") token: string) {
+    return this.applyUnsubscribe(token);
+  }
+
+  private async applyUnsubscribe(token: string) {
+    const claim = verifyUnsubscribeToken(String(token ?? ""));
+    // A bad token is not an error worth advertising: mail clients retry, and
+    // a 4xx here makes a provider treat our unsubscribe as broken.
+    if (!claim) return { ok: true, unsubscribed: false };
+    return withActor(this.db, SERVICE, async (tx) => {
+      const [u] = await tx.select({ id: users.id }).from(users)
+        .where(eq(users.id, claim.userId)).limit(1);
+      if (!u) return { ok: true, unsubscribed: false };
+      const before = await getPrefs(tx, claim.userId);
+      const next = { ...before, [claim.kind]: false };
+      await tx.update(users).set({ notificationPrefs: next }).where(eq(users.id, claim.userId));
+      await insertAudit(tx, {
+        actorUserId: null, action: "notification.unsubscribed_one_click",
+        entityType: "user", entityId: claim.userId,
+        before, after: { kind: claim.kind },
+      });
+      return { ok: true, unsubscribed: true, kind: claim.kind, label: KIND_LABELS[claim.kind].label };
     });
   }
 }

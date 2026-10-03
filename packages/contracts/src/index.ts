@@ -138,12 +138,18 @@ export type ThreadCreateBody = z.infer<typeof ThreadCreateBody>;
 export const MessageBody = z.object({ body_text: z.string().min(1).max(4000) });
 export type MessageBody = z.infer<typeof MessageBody>;
 
-/* ── Phase 5.3: push subscriptions (Web Push, RFC 8030 payload subset) ── */
-export const PushSubscribeBody = z.object({
-  endpoint: z.string().url().max(2000),
-  keys: z.object({ p256dh: z.string().min(1), auth: z.string().min(1) }).optional(),
+/* ── notification preferences ──
+ * The categories a recipient may switch off. Security and account mail
+ * (password resets, invitations, MFA enrolment, deactivation notices) is
+ * deliberately absent: you cannot unsubscribe from being told your password
+ * was changed. A partial body is a partial update. */
+export const NotificationPrefsBody = z.object({
+  absence_recorded: z.boolean().optional(),
+  grade_released: z.boolean().optional(),
+  message_received: z.boolean().optional(),
+  daily_digest: z.boolean().optional(),
 });
-export type PushSubscribeBody = z.infer<typeof PushSubscribeBody>;
+export type NotificationPrefsBody = z.infer<typeof NotificationPrefsBody>;
 
 /* ── Phase 5.3: directory writes ── */
 export const UserCreateBody = z.object({

@@ -4,7 +4,7 @@ import type { Db } from "../db/client";
 import { withActor, SERVICE } from "../db/actor";
 import {
   notifications, sessions, passwordResetTokens, userInvites, mfaEnrollTokens,
-  idempotencyKeys, pushSubscriptions, importJobs, retentionRuns, users,
+  idempotencyKeys, importJobs, retentionRuns, users,
   identities, mfaRecoveryCodes, mfaFactors, students, userRoles,
   grades, attendanceRecords, enrollments, feeInvoices, feePayments, reportCards, auditLog,
 } from "../db/schema";
@@ -44,10 +44,6 @@ export interface RetentionWindows {
   tokensDays: number;
   /** Replay-protection keys. Purely operational. */
   idempotencyDays: number;
-  /** Push endpoints after sustained delivery failure. */
-  pushFailureDays: number;
-  /** Minimum consecutive failures before a push endpoint is retired. */
-  pushFailureCount: number;
   /** Finished import jobs — these hold uploaded roster rows. */
   importJobsDays: number;
   /**
@@ -68,8 +64,6 @@ export function retentionWindows(env = process.env): RetentionWindows {
     sessionsDays: int(env.RETENTION_SESSIONS_DAYS, 30),
     tokensDays: int(env.RETENTION_TOKENS_DAYS, 30),
     idempotencyDays: int(env.RETENTION_IDEMPOTENCY_DAYS, 7),
-    pushFailureDays: int(env.RETENTION_PUSH_FAILURE_DAYS, 90),
-    pushFailureCount: int(env.RETENTION_PUSH_FAILURE_COUNT, 5),
     importJobsDays: int(env.RETENTION_IMPORT_JOBS_DAYS, 30),
     leaverAnonymiseDays: int(env.RETENTION_LEAVER_ANONYMISE_DAYS, 0),
   };
@@ -169,17 +163,7 @@ export async function runRetention(
       await sweep("idempotencyKeys", idempotencyKeys,
         lt(idempotencyKeys.createdAt, daysAgo(now, w.idempotencyDays)));
 
-      // 5. Push subscriptions the browser has stopped accepting. Needs both
-      //    sustained failure and age, so one bad night does not unsubscribe
-      //    the school.
-      await sweep("pushSubscriptions", pushSubscriptions, and(
-        gte(pushSubscriptions.failureCount, w.pushFailureCount),
-        isNotNull(pushSubscriptions.lastFailureAt),
-        lt(pushSubscriptions.lastFailureAt, daysAgo(now, w.pushFailureDays)),
-        or(isNull(pushSubscriptions.lastSuccessAt),
-          sql`${pushSubscriptions.lastSuccessAt} < ${pushSubscriptions.lastFailureAt}`)));
-
-      // 6. Finished import jobs. These are the most personal-data-dense rows
+      // 5. Finished import jobs. These are the most personal-data-dense rows
       //    in the database: an uploaded roster with every pupil's name, date
       //    of birth and guardian contact, plus generated passwords.
       const importCut = daysAgo(now, w.importJobsDays);
@@ -196,7 +180,7 @@ export async function runRetention(
         await tx.delete(importJobs).where(inArray(importJobs.id, staleJobs.map((j) => j.id)));
       }
 
-      // 7. Leaver anonymisation — opt-in, see the note above.
+      // 6. Leaver anonymisation — opt-in, see the note above.
       if (w.leaverAnonymiseDays > 0) {
         const cut = daysAgo(now, w.leaverAnonymiseDays);
         const leavers = await tx.select({ id: users.id }).from(users).where(and(
@@ -343,7 +327,6 @@ export async function previewErasure(tx: Db, userId: string): Promise<ErasurePre
     { what: "Sessions", count: await count(sessions, eq(sessions.userId, userId)) },
     { what: "Two-factor secrets", count: await count(mfaFactors, eq(mfaFactors.userId, userId)) },
     { what: "Recovery codes", count: await count(mfaRecoveryCodes, eq(mfaRecoveryCodes.userId, userId)) },
-    { what: "Push subscriptions", count: await count(pushSubscriptions, eq(pushSubscriptions.userId, userId)) },
     { what: "Pending invitations and tokens",
       count: await count(passwordResetTokens, eq(passwordResetTokens.userId, userId))
         + await count(mfaEnrollTokens, eq(mfaEnrollTokens.userId, userId)) },
@@ -384,7 +367,6 @@ export async function anonymiseUser(
   await tx.delete(identities).where(eq(identities.userId, userId));
   await tx.delete(mfaFactors).where(eq(mfaFactors.userId, userId));
   await tx.delete(mfaRecoveryCodes).where(eq(mfaRecoveryCodes.userId, userId));
-  await tx.delete(pushSubscriptions).where(eq(pushSubscriptions.userId, userId));
   await tx.delete(passwordResetTokens).where(eq(passwordResetTokens.userId, userId));
   await tx.delete(mfaEnrollTokens).where(eq(mfaEnrollTokens.userId, userId));
   await tx.delete(notifications).where(eq(notifications.recipientUserId, userId));

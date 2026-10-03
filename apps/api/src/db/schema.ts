@@ -26,6 +26,8 @@ export const users = pgTable("users", {
   /** Records held under a statutory window: restricted, not erased (NDPA §34(4)). */
   processingRestricted: boolean("processing_restricted").notNull().default(false),
   erasureNote: text("erasure_note"),
+  /* 0014: opt-outs for non-essential email. Absent key = subscribed. */
+  notificationPrefs: jsonb("notification_prefs").notNull().default({}),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }),
 });
@@ -344,20 +346,6 @@ export const notifications = pgTable("notifications", {
   lockedBy: text("locked_by"),
   failedPermanently: boolean("failed_permanently").notNull().default(false),
   lastAttemptAt: timestamp("last_attempt_at", { withTimezone: true }),
-});
-
-export const pushSubscriptions = pgTable("push_subscriptions", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  userId: uuid("user_id").notNull(),
-  endpoint: text("endpoint").notNull().unique(),
-  p256dh: text("p256dh"),
-  authKey: text("auth_key"),
-  userAgent: text("user_agent"),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  /* 0013 retention: retire endpoints the browser has stopped accepting */
-  failureCount: integer("failure_count").notNull().default(0),
-  lastFailureAt: timestamp("last_failure_at", { withTimezone: true }),
-  lastSuccessAt: timestamp("last_success_at", { withTimezone: true }),
 });
 
 export const reportCards = pgTable("report_cards", {

@@ -7,7 +7,10 @@ import { withActor, SERVICE } from "../db/actor";
 import { sessions, users, userRoles, rolePermissions } from "../db/schema";
 import { Principal, STAFF_ROLES, ROLE_PRIORITY } from "./principal";
 
-const PUBLIC = new Set(["/api/v1/auth/login", "/api/v1/auth/providers", "/api/v1/auth/password/forgot", "/api/v1/auth/password/reset", "/api/v1/auth/invite/accept", "/api/v1/health"]);
+const PUBLIC = new Set(["/api/v1/auth/login", "/api/v1/auth/providers", "/api/v1/auth/password/forgot", "/api/v1/auth/password/reset", "/api/v1/auth/invite/accept", "/api/v1/health",
+  // RFC 8058: Gmail/Yahoo POST this straight from the mail client with no
+  // cookies and no session. Authority comes from the HMAC in the token.
+  "/api/v1/notifications/unsubscribe"]);
 const PUBLIC_PREFIXES = ["/api/v1/auth/sso/", "/api/v1/webhooks/", "/api/v1/school"]; // OIDC (5.3) + gateway webhooks (5.4, HMAC-verified) + public school identity (phase 6; GET only — PUT is @Perm-gated)
 const MFA_EXEMPT = ["/api/v1/auth/mfa", "/api/v1/auth/session", "/api/v1/auth/logout", "/api/v1/health/dev-enroll-tokens"];
 

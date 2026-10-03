@@ -26,7 +26,7 @@ const { totpCode } = require("../dist/crypto/totp.js");
 const { withActor, SERVICE } = require("../dist/db/actor.js");
 const { issueEnrollToken } = require("../dist/auth/enroll-token.js");
 const {
-  users, userRoles, sessions, auditLog, passwordResetTokens, pushSubscriptions,
+  users, userRoles, sessions, auditLog, passwordResetTokens,
   userInvites, guardians, mfaEnrollTokens,
 } = require("../dist/db/schema.js");
 const { eq, and, isNull, desc, sql } = require("drizzle-orm");
@@ -251,9 +251,6 @@ test("pending reset links, invites and enrol tokens die with the account", async
       id: randomUUID(), email, displayName: "T2", roleCodes: JSON.stringify(["teacher"]),
       tokenHash: `invite-${randomUUID()}`, expiresAt: new Date(Date.now() + 86_400_000),
     });
-    await tx.insert(pushSubscriptions).values({
-      id: randomUUID(), userId: uid, endpoint: `https://push.example/${randomUUID()}`,
-    });
   });
 
   const res = await request(server).post(`/api/v1/users/${uid}/deactivate`).set(auth("admin")).send({});
@@ -261,15 +258,11 @@ test("pending reset links, invites and enrol tokens die with the account", async
   assert.ok(res.body.effects.resetTokensVoided >= 1, "reset tokens must be voided");
   assert.ok(res.body.effects.enrollTokensVoided >= 1, "MFA enrol tokens must be voided");
   assert.ok(res.body.effects.invitesCancelled >= 1, "pending invites must be cancelled");
-  assert.ok(res.body.effects.pushSubscriptionsRemoved >= 1, "their phone stops getting school pushes");
 
   const live = await withActor(db, SERVICE, async (tx) =>
     tx.select().from(passwordResetTokens).where(and(
       eq(passwordResetTokens.userId, uid), isNull(passwordResetTokens.usedAt))));
   assert.equal(live.length, 0);
-  const pushes = await withActor(db, SERVICE, async (tx) =>
-    tx.select().from(pushSubscriptions).where(eq(pushSubscriptions.userId, uid)));
-  assert.equal(pushes.length, 0);
 
   await request(server).post(`/api/v1/users/${uid}/reactivate`).set(auth("admin")).send({});
 });
