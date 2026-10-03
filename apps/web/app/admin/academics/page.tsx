@@ -2,6 +2,7 @@ import { requireRole, apiGet } from "@/lib/session";
 import Shell from "@/components/shell";
 import AcademicsPanel from "./academics-panel";
 import GradingPanel from "./grading-panel";
+import RolloverPanel from "./rollover-panel";
 
 interface Year { id: string; name: string; startDate: string; endDate: string; isCurrent: boolean }
 interface Term { id: string; academicYearId: string; termNo: number; name: string }
@@ -20,6 +21,7 @@ export default async function AdminAcademics() {
       <p className="muted">Academic years, terms and teacher assignments — the skeleton every class record hangs from.</p>
       <GradingPanel />
       <AcademicsPanel years={years?.data ?? []} terms={terms?.data ?? []} sections={sections?.data ?? []} />
+      <RolloverPanel years={years?.data ?? []} />
     </Shell>
   );
 }

@@ -3,14 +3,16 @@ import {
   UnprocessableEntityException,
 } from "@nestjs/common";
 import { randomUUID } from "node:crypto";
-import { eq, and } from "drizzle-orm";
+import { eq, and, desc } from "drizzle-orm";
 import type { Db } from "../db/client";
 import { DB_TOKEN } from "../db/token";
 import { withActor, SERVICE } from "../db/actor";
-import { courseSections, courses, sectionStaff, enrollments, students, users, terms, academicYears } from "../db/schema";
+import { courseSections, courses, sectionStaff, enrollments, students, users, terms, academicYears, yearRollovers } from "../db/schema";
 import { Perm } from "../common/guards";
 import { insertAudit } from "../common/audit";
 import { SectionCreateBody, EnrollBody, YearBody, TermBody, StaffAssignBody } from "@portal/contracts";
+import { planRollover, commitRollover, revertRollover, MAX_GRADE } from "./rollover.service";
+import type { RolloverOptions, PupilAction } from "./rollover.service";
 import type { Request } from "express";
 
 @Controller()
@@ -204,6 +206,106 @@ export class AcademicsController {
       await insertAudit(tx, { actorUserId: p.userId, action: "academic_year.set_current",
         entityType: "academic_year", entityId: id, ip: req.ip });
       return { ok: true };
+    });
+  }
+
+  /* ── Academic year rollover ───────────────────────────────────────────────
+   * Promotion, graduation and carrying the timetable forward. Without this
+   * the portal cannot start a second year.
+   * ──────────────────────────────────────────────────────────────────────── */
+
+  private rolloverOptions(body: unknown, dryRunDefault: boolean): RolloverOptions {
+    const b = (body ?? {}) as Record<string, any>;
+    const overrides: Record<string, PupilAction> = {};
+    const allowed: PupilAction[] = ["promote", "retain", "graduate", "withdraw", "transfer"];
+    for (const o of Array.isArray(b.overrides) ? b.overrides : []) {
+      if (o && typeof o.student_user_id === "string" && allowed.includes(o.action)) {
+        overrides[o.student_user_id] = o.action;
+      }
+    }
+    return {
+      // Dry run is the DEFAULT. Promoting a whole school is not something that
+      // should ever happen because a flag was omitted.
+      dryRun: b.dry_run === false ? false : dryRunDefault,
+      toYearId: typeof b.to_year_id === "string" ? b.to_year_id : undefined,
+      nextYear: b.next_year && typeof b.next_year.name === "string" ? {
+        name: b.next_year.name,
+        startDate: b.next_year.start_date, endDate: b.next_year.end_date,
+      } : undefined,
+      termTemplate: Array.isArray(b.terms) ? b.terms
+        .filter((t: any) => Number.isInteger(t?.term_no) && typeof t?.name === "string")
+        .map((t: any) => ({ termNo: t.term_no, name: t.name })) : undefined,
+      graduatingGrade: Number.isInteger(b.graduating_grade) ? b.graduating_grade : undefined,
+      carrySections: b.carry_sections !== false,
+      carryStaff: b.carry_staff !== false,
+      setCurrent: b.set_current === true,
+      overrides,
+    };
+  }
+
+  /** What rollover would do — writes nothing. */
+  @Post("academic-years/:id/rollover-preview")
+  @Perm("academics:write")
+  async rolloverPreview(@Req() req: Request, @Param("id") id: string, @Body() body: unknown) {
+    const opts = this.rolloverOptions(body, true);
+    return withActor(this.db, SERVICE, (tx) => planRollover(tx, id, { ...opts, dryRun: true }));
+  }
+
+  /**
+   * Run the rollover. `dry_run` defaults to true: a caller must explicitly
+   * send `dry_run: false` to move every pupil in the school.
+   */
+  @Post("academic-years/:id/rollover")
+  @Perm("academics:write")
+  async rollover(@Req() req: Request, @Param("id") id: string, @Body() body: unknown) {
+    const p = req.principal!;
+    const opts = this.rolloverOptions(body, true);
+    return withActor(this.db, SERVICE, async (tx) => {
+      if (opts.dryRun) return planRollover(tx, id, opts);
+      const result = await commitRollover(tx, id, opts, { userId: p.userId, role: p.activeRole });
+      if (result.blockers.length) {
+        throw new UnprocessableEntityException({
+          code: "rollover_blocked", title: "This rollover cannot run",
+          detail: result.blockers.join(" "),
+        });
+      }
+      return result;
+    });
+  }
+
+  /** Rollover history, newest first. */
+  @Get("rollovers")
+  @Perm("academics:read")
+  async rolloverHistory(@Req() req: Request) {
+    const p = req.principal!;
+    return withActor(this.db, { userId: p.userId, role: p.activeRole }, async (tx) => {
+      const rows = await tx.select().from(yearRollovers)
+        .orderBy(desc(yearRollovers.performedAt)).limit(50);
+      return {
+        data: rows.map((r) => ({
+          id: r.id, fromYearId: r.fromYearId, toYearId: r.toYearId,
+          performedAt: r.performedAt, performedBy: r.performedBy,
+          summary: r.summary, revertedAt: r.revertedAt,
+          // Per-pupil state can be large and is only needed for the undo.
+          pupils: Array.isArray(r.studentStates) ? r.studentStates.length : 0,
+        })),
+      };
+    });
+  }
+
+  /** Undo a rollover, restoring every pupil's previous year group. */
+  @Post("rollovers/:id/revert")
+  @Perm("academics:write")
+  async rolloverRevert(@Req() req: Request, @Param("id") id: string) {
+    const p = req.principal!;
+    return withActor(this.db, SERVICE, async (tx) => {
+      const res = await revertRollover(tx, id, { userId: p.userId, role: p.activeRole });
+      if (!res.ok) {
+        throw new UnprocessableEntityException({
+          code: "revert_failed", title: "This rollover cannot be reverted", detail: res.detail,
+        });
+      }
+      return res;
     });
   }
 

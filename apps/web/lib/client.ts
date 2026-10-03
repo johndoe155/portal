@@ -8,7 +8,11 @@ function csrfToken(): string {
 
 export class ApiError extends Error {
   status: number; code: string;
-  constructor(status: number, code: string, message: string) { super(message); this.status = status; this.code = code; }
+  /** The server's longer explanation, when it sent one — worth showing. */
+  detail?: string;
+  constructor(status: number, code: string, message: string, detail?: string) {
+    super(message); this.status = status; this.code = code; this.detail = detail;
+  }
 }
 
 export async function api<T = unknown>(path: string, init?: RequestInit & { idempotencyKey?: string }): Promise<T> {
@@ -18,6 +22,9 @@ export async function api<T = unknown>(path: string, init?: RequestInit & { idem
   if (init?.idempotencyKey) headers.set("idempotency-key", init.idempotencyKey);
   const res = await fetch(`/api/v1${path}`, { ...init, headers, credentials: "same-origin" });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new ApiError(res.status, body?.code ?? "error", body?.title ?? body?.detail ?? res.statusText);
+  if (!res.ok) {
+    throw new ApiError(res.status, body?.code ?? "error",
+      body?.title ?? body?.detail ?? res.statusText, body?.detail);
+  }
   return body as T;
 }

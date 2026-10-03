@@ -72,6 +72,48 @@ Only when this page is clean should the school stop using its old spreadsheet. F
 - Staff TOTP resets: `scripts/mfa-token.mjs <email>` (requires the admin endpoint or ops CLI).
 - Watch `audit_log` for `guardian_link.*`, `fee.*`, `import.*` actions — every phase-6 write is audited.
 
+## 10. End of the academic year — `/admin/academics` → End-of-year rollover
+
+The portal is not a one-year tool, but the transition is the single most
+far-reaching write it performs: every pupil record moves at once. Treat it as a
+scheduled change, not an afternoon click.
+
+1. **Finish the year first.** Publish final marks, close attendance and settle
+   or carry over invoices. The rollover never touches them, but you want the
+   outgoing year's records settled before the new one starts.
+2. **Take a backup you can name.** The nightly dump is enough, but confirm
+   `GET /api/v1/health` shows a fresh `backup.completed_at` before you start.
+3. **Preview.** Choose the year ending, name the year starting (the dates
+   default to one year on), and set the final year group — pupils in it
+   graduate instead of moving up. Press **Preview rollover**. Nothing is
+   written.
+4. **Review the list.** Open *Review all N pupils*. Every repeater, early
+   leaver and transfer is set here, one dropdown per pupil; the counts
+   re-calculate as you go. Overridden rows are highlighted.
+5. **Read the warnings.** Blockers stop the run outright — the common one is a
+   final year group set too high, which would push pupils past Year 13. Warnings
+   are informational (e.g. how many accounts will be closed).
+6. **Commit.** Type the new year's name to confirm, then run it. The whole
+   rollover is one transaction: it either completes or leaves the school exactly
+   where it was.
+
+What it does and does not do:
+
+| Does | Does not |
+| --- | --- |
+| Creates the new year and its terms (copied from the outgoing year) | Touch last year's enrolments, marks, attendance or invoices |
+| Moves each pupil up one year group, or whatever you overrode | Enrol anybody into the new classes — they are created empty |
+| Marks the leaving cohort `graduated` and ends their portal sign-in | Delete any pupil, account or record |
+| Recreates the class list in the matching term, optionally with the same teachers | Change fee schedules or guardian links |
+
+**If it was wrong**, press **Undo** on the row in *Previous rollovers*. Every
+pupil returns to their previous year group and graduates get their access back.
+Classes the rollover created are deliberately left in place — a teacher may
+already be using them — so delete those by hand if you do not want them.
+
+Re-running the same pair of years is refused while the first run stands, so a
+double-click or a retried request cannot promote anyone twice.
+
 ## Rollback
 The portal is stateless above Postgres: restore the nightly dump
 (`scripts/restore.sh`, see [docs/backup-restore.md](./backup-restore.md)) and

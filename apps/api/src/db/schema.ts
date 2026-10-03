@@ -452,3 +452,17 @@ export const transportAssignments = pgTable("transport_assignments", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   endedAt: timestamp("ended_at", { withTimezone: true }),
 });
+
+/* ── 0012: academic year rollover ── */
+export const yearRollovers = pgTable("year_rollovers", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  fromYearId: uuid("from_year_id").notNull(),
+  toYearId: uuid("to_year_id").notNull(),
+  performedBy: uuid("performed_by"),
+  performedAt: timestamp("performed_at", { withTimezone: true }).notNull().defaultNow(),
+  summary: jsonb("summary").notNull().default({}),
+  /** Per-pupil prior state, so a rollover can actually be undone. */
+  studentStates: jsonb("student_states").notNull().default([]),
+  revertedAt: timestamp("reverted_at", { withTimezone: true }),
+  revertedBy: uuid("reverted_by"),
+});
