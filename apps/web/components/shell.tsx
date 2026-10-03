@@ -82,6 +82,18 @@ export default function Shell({ session, children }: { session: SessionView; chi
         <button className="btn ghost" onClick={logout} style={{ minHeight: 36, padding: "4px 12px" }}>Sign out</button>
       </header>
       <div className="container">
+        {session.mfaGraceUntil && (
+          /* Grace is dated and self-closing. Somebody has to be told the date
+             before the morning it shuts, or the first they know of it is a
+             sign-in that stops working. */
+          <div className="alert warn" role="status" style={{ marginTop: 12 }}>
+            <strong>Set up two-factor sign-in.</strong>{" "}
+            Your account has no second factor yet. Staff sign-in without one stops working after{" "}
+            {new Date(session.mfaGraceUntil).toLocaleDateString(undefined,
+              { day: "numeric", month: "long", year: "numeric" })}.{" "}
+            Ask the office for an enrolment token, then <Link href="/mfa">set it up</Link>.
+          </div>
+        )}
         <nav className="tabbar" aria-label="Primary">
           {tabs.map((t) => (
             <Link key={t.href} href={t.href} className={pathname === t.href || pathname.startsWith(t.href + "/") ? "on" : ""}>

@@ -50,5 +50,6 @@ th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line
 .alert { border-radius: 10px; padding: 10px 12px; margin: 8px 0; font-size: .9rem; }
 .alert.err { background: #fef2f2; color: var(--bad); border: 1px solid var(--bad); }
 .alert.ok { background: #ecfdf5; color: var(--ok); border: 1px solid var(--ok); }
+.alert.warn { background: #fffbeb; color: #92400e; border: 1px solid #f59e0b; }
 .skip { position: absolute; left: -9999px; }
 :focus-visible { outline: 3px solid var(--brand); outline-offset: 2px; }

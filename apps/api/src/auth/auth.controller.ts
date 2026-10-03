@@ -55,6 +55,11 @@ export class AuthController {
     return { userId: p.userId, email: p.email, displayName: p.displayName, roles: p.roles,
       activeRole: p.activeRole, permissions: p.perms,
       mfaVerified: p.mfaVerified, mfaRequired: p.mfaRequired,
+      mfaEnrolled: p.mfaEnrolled,
+      // Non-null only while this account is relying on the rollout grace
+      // window, so the UI can say "you have until the 31st" rather than
+      // letting someone discover it when the window shuts.
+      mfaGraceUntil: p.mfaInGrace ? config.mfaGraceUntil?.toISOString() ?? null : null,
       mustChangePassword: p.mustChangePassword === true };
   }
 

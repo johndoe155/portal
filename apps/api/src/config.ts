@@ -124,6 +124,47 @@ function resolvePublicWebOrigin(isProduction: boolean): string {
   return v || "http://127.0.0.1:3000";
 }
 
+
+/**
+ * Two-factor rollout grace.
+ *
+ * .env.example said "MFA_ENFORCE — NEVER set false in production" while the
+ * runbook said "do not turn on enforcement until coverage is 100%". Both are
+ * reasonable and together they are impossible: coverage cannot reach 100%
+ * until staff can sign in to enrol, and MFA_ENFORCE is a single global kill
+ * switch — flipping it off disables step-up for the admins who already have
+ * a factor, which is exactly backwards.
+ *
+ * MFA_GRACE_UNTIL resolves it without ever handing anyone a
+ * turn-off-security switch. During the window:
+ *
+ *   - staff with NO enrolled factor may work, so the registrar can run the
+ *     rollout and the staff meeting can happen;
+ *   - staff who HAVE enrolled still face step-up — enrolling must never make
+ *     your account less protected;
+ *   - super_admins are never in grace. The accounts worth attacking are the
+ *     ones that enrol first.
+ *
+ * It is a date, not a boolean, so it closes itself. An operator cannot
+ * forget to turn it off, and /reports/go-live says loudly while it is open.
+ */
+function resolveMfaGraceUntil(raw = process.env.MFA_GRACE_UNTIL?.trim()): Date | null {
+  if (!raw) return null;
+  const d = new Date(raw.length === 10 ? `${raw}T23:59:59Z` : raw);
+  if (Number.isNaN(d.getTime())) {
+    throw new Error(
+      `MFA_GRACE_UNTIL is not a date: "${raw}". Use an ISO date such as 2026-10-31. ` +
+      "Refusing to start rather than guessing whether two-factor is enforced.");
+  }
+  const MAX_DAYS = 90;
+  if (d.getTime() - Date.now() > MAX_DAYS * 86_400_000) {
+    throw new Error(
+      `MFA_GRACE_UNTIL is more than ${MAX_DAYS} days away (${raw}). A rollout window that long ` +
+      "is not a rollout, it is disabled two-factor with extra steps.");
+  }
+  return d;
+}
+
 const isProduction = process.env.NODE_ENV === "production";
 
 export const config = {
@@ -133,6 +174,12 @@ export const config = {
   cookieSecure: process.env.COOKIE_SECURE !== "false",
   /** staff MFA step-up enforcement; off only for local demo */
   mfaEnforce: process.env.MFA_ENFORCE !== "false",
+  /**
+   * End of the enrolment grace window (see resolveMfaGraceUntil). Null means
+   * no grace: every staff account needs a factor, today.
+   */
+  mfaGraceUntil: resolveMfaGraceUntil(),
+
   appSecret: resolveAppSecret(isProduction),
   sessionTtlHoursStaff: 12,
   sessionTtlHoursUser: 24,
@@ -177,3 +224,6 @@ export const config = {
   lockout: { maxFailures: 5, durationMs: 15 * 60_000 },
 };
 export type Config = typeof config;
+
+/** Exposed so the grace-window rejection rules can be tested directly. */
+export const resolveGraceForTest = resolveMfaGraceUntil;

@@ -4,7 +4,7 @@ import { eq, and, isNull, gt } from "drizzle-orm";
 import { config } from "../config";
 import type { Db } from "../db/client";
 import { withActor, SERVICE } from "../db/actor";
-import { sessions, users, userRoles, rolePermissions } from "../db/schema";
+import { sessions, users, userRoles, rolePermissions, mfaFactors } from "../db/schema";
 import { Principal, STAFF_ROLES, ROLE_PRIORITY } from "./principal";
 
 const PUBLIC = new Set(["/api/v1/auth/login", "/api/v1/auth/providers", "/api/v1/auth/password/forgot", "/api/v1/auth/password/reset", "/api/v1/auth/invite/accept", "/api/v1/health",
@@ -33,12 +33,24 @@ export function makeSessionMiddleware(db: Db) {
           if (!roles.includes(sess.activeRole)) return null;
           const permRows = await tx.select().from(rolePermissions)
             .where(eq(rolePermissions.roleCode, sess.activeRole));
+          const factors = await tx.select({ id: mfaFactors.id }).from(mfaFactors)
+            .where(eq(mfaFactors.userId, user.id)).limit(1);
+          const mfaRequired = roles.some((r) => STAFF_ROLES.has(r));
+          const mfaEnrolled = factors.length > 0;
+          // Grace covers exactly one situation: a member of staff who has not
+          // enrolled yet, during the published rollout window. Someone who HAS
+          // enrolled still steps up (enrolling must not weaken your account),
+          // and super_admins are never in grace.
+          const mfaInGrace = mfaRequired && !mfaEnrolled
+            && !roles.includes("super_admin")
+            && config.mfaGraceUntil != null
+            && config.mfaGraceUntil.getTime() > Date.now();
           return {
             userId: user.id, sessionId: sess.id, email: user.email, displayName: user.displayName,
             roles, activeRole: sess.activeRole,
             perms: permRows.map((r) => r.permission),
             mfaVerified: sess.mfaVerifiedAt != null,
-            mfaRequired: roles.some((r) => STAFF_ROLES.has(r)),
+            mfaRequired, mfaEnrolled, mfaInGrace,
             mustChangePassword: user.mustChangePassword === true,
           } as Principal;
         });
@@ -52,9 +64,15 @@ export function makeSessionMiddleware(db: Db) {
           title: "Authentication required", status: 401, code: "unauthenticated" });
       }
       if (req.principal && config.mfaEnforce && req.principal.mfaRequired &&
-          !req.principal.mfaVerified && !MFA_EXEMPT.some((m) => path.startsWith(m))) {
+          !req.principal.mfaVerified && !req.principal.mfaInGrace &&
+          !MFA_EXEMPT.some((m) => path.startsWith(m))) {
         return res.status(403).json({ type: "https://portal.school/errors/mfa_required",
           title: "MFA verification required", status: 403, code: "mfa_required" });
+      }
+      // Working on borrowed time: tell the client so it can nag, and make the
+      // window visible in logs rather than only in config.
+      if (req.principal?.mfaInGrace && config.mfaGraceUntil) {
+        res.setHeader("x-mfa-grace-until", config.mfaGraceUntil.toISOString());
       }
       // review-6 #3: an account still on an admin/CSV-issued temporary password
       // is locked to the auth surface (login, change-password, MFA) until changed.

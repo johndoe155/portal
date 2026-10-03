@@ -7,6 +7,13 @@ export interface SessionView {
   userId: string; email: string; displayName: string;
   roles: string[]; activeRole: string; permissions: string[];
   mfaVerified: boolean; mfaRequired: boolean;
+  /** Whether this account has actually enrolled a second factor. */
+  mfaEnrolled?: boolean;
+  /**
+   * Set only while this account is relying on the two-factor rollout grace
+   * window (MFA_GRACE_UNTIL): staff, nothing enrolled yet, not a super_admin.
+   */
+  mfaGraceUntil?: string | null;
   /** review-6 #3: temporary password from admin/CSV — must change before use */
   mustChangePassword?: boolean;
 }
@@ -29,8 +36,13 @@ export async function checkSession(): Promise<SessionCheck> {
   });
   if (res.ok) {
     const session = (await res.json()) as SessionView;
-    // GET /auth/session is MFA-exempt on the API, so the gate is decided here:
-    if (session.mfaRequired && !session.mfaVerified) return { kind: "mfa", session };
+    // GET /auth/session is MFA-exempt on the API, so the gate is decided here.
+    // mfaGraceUntil mirrors the API's own grace decision — if the two
+    // disagreed, staff would be let through by the API and bounced to /mfa by
+    // the web, which looks exactly like a broken login.
+    if (session.mfaRequired && !session.mfaVerified && !session.mfaGraceUntil) {
+      return { kind: "mfa", session };
+    }
     return { kind: "authed", session };
   }
   return { kind: "anon" };

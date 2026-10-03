@@ -100,8 +100,14 @@ Only when both are clean should the school stop using its old spreadsheet. From 
   (usually a wrong address or an SPF/DKIM rejection), not a transient one.
 - **Two-factor rollout** — `/admin/users` → *Two-factor rollout* shows coverage
   and issues enrolment tokens for everyone outstanding in one action, with a
-  printable sheet for the staff meeting where it realistically happens. Do not
-  turn on enforcement until coverage is 100%.
+  printable sheet for the staff meeting where it realistically happens.
+  **Leave `MFA_ENFORCE=true`.** It is a global kill switch: turning it off to
+  get the rollout started would also drop step-up for the admins who have
+  already enrolled. Use `MFA_GRACE_UNTIL=<ISO date>` instead — during that
+  window staff with no factor yet can sign in and work, staff who have
+  enrolled still step up, and super_admins never qualify. The window closes
+  itself on the date; `/health` warns while it is open and `/reports/go-live`
+  fails until nobody is relying on it. Unset it once coverage is 100%.
 - **Leavers** — `/admin/users` → a user's *Offboard* preview lists what they
   still hold (classes taught, children linked, unpaid invoices) before you
   deactivate. Deactivation is reversible; erasure is not.

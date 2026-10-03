@@ -2,6 +2,7 @@ import { Controller, Get, Inject, NotFoundException, Res } from "@nestjs/common"
 import type { Response } from "express";
 import { sql } from "drizzle-orm";
 import type { Db } from "../db/client";
+import { config } from "../config";
 import { DB_TOKEN } from "../db/token";
 import { withActor, SERVICE } from "../db/actor";
 import { devEnrollTokens } from "../seed";
@@ -49,6 +50,13 @@ export class HealthController {
     // missing SMTP password.
     const warnings: string[] = [];
     if (!mailConfigured()) warnings.push("SMTP not configured — no email is being delivered");
+    // A grace window is a deliberate, dated, self-closing weakening of staff
+    // sign-in. It belongs where the on-call person looks, not only in config.
+    if (config.mfaGraceUntil && config.mfaGraceUntil.getTime() > Date.now()) {
+      warnings.push(
+        `two-factor enrolment grace is open until ${config.mfaGraceUntil.toISOString().slice(0, 10)}` +
+        " — staff with no enrolled factor can sign in without step-up");
+    }
     if (outbox && (outbox.dead as number) > 0) warnings.push(`${outbox.dead} undelivered notification(s) need attention`);
     const backup = backupFreshness();
     if (backup.stale) {

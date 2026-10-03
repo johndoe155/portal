@@ -194,6 +194,26 @@ export async function goLiveReadiness(db: Db): Promise<Readiness> {
 
     const admins = await n(userRoles,
       and(eq(userRoles.roleCode, "super_admin"), isNull(userRoles.revokedAt)));
+    // The rollout grace window, if one is open. This is the check that stops
+    // MFA_GRACE_UNTIL quietly becoming permanent.
+    const grace = config.mfaGraceUntil;
+    const graceOpen = grace != null && grace.getTime() > Date.now();
+    const graceUnenrolled = staff.length - covered;
+    add({
+      id: "mfa_grace", group: "Security", label: "Two-factor grace window closed",
+      status: !graceOpen ? "pass" : graceUnenrolled === 0 ? "warn" : "fail",
+      detail: !graceOpen
+        ? grace
+          ? `The enrolment grace window closed on ${grace.toISOString().slice(0, 10)}; every ` +
+            "staff account now needs a second factor."
+          : "No grace window. Every staff account needs a second factor to sign in."
+        : `Grace window open until ${grace.toISOString().slice(0, 10)}: ${graceUnenrolled} staff ` +
+          "account(s) can currently sign in without a second factor. Accounts that HAVE " +
+          "enrolled still step up, and super_admins are never in grace — but going live in " +
+          "this state means graceUnenrolled staff are a password away from the whole school's records.",
+      fix: "Finish the rollout at /admin/users → Two-factor rollout, then unset MFA_GRACE_UNTIL",
+    });
+
     add({
       id: "admin_bus_factor", group: "Security", label: "More than one administrator",
       status: admins >= 2 ? "pass" : "warn",
