@@ -90,6 +90,40 @@ function resolveAppSecret(isProduction: boolean): string {
   return v ?? DEV_APP_SECRET;
 }
 
+
+/**
+ * The origin the browser actually reaches the portal on.
+ *
+ * Every link in every email is built from this. The worker renders those
+ * emails in its own process, so if PUBLIC_WEB_ORIGIN is set on the API but
+ * not on the worker, the portal looks fine and every "Open the portal" button
+ * a parent receives points at http://127.0.0.1:3000 — their own machine.
+ * That is exactly what happened in docker-compose.
+ *
+ * A loopback default is useful in dev and indefensible in production, so
+ * production refuses to boot without a real one rather than silently sending
+ * thousands of dead links.
+ */
+function resolvePublicWebOrigin(isProduction: boolean): string {
+  const v = process.env.PUBLIC_WEB_ORIGIN?.trim().replace(/\/+$/, "");
+  if (isProduction) {
+    if (!v) {
+      throw new Error(
+        "PUBLIC_WEB_ORIGIN is required in production — every link in every email is built " +
+        "from it. Set it on the API *and* the worker.");
+    }
+    if (/^https?:\/\/(localhost|127\.|0\.0\.0\.0|\[::1\])/i.test(v)) {
+      throw new Error(
+        `PUBLIC_WEB_ORIGIN is a loopback address (${v}). Emails would link recipients to their ` +
+        "own machine. Set it to the address the school's browsers use.");
+    }
+    if (!/^https:\/\//i.test(v)) {
+      throw new Error(`PUBLIC_WEB_ORIGIN must be https in production (got ${v}).`);
+    }
+  }
+  return v || "http://127.0.0.1:3000";
+}
+
 const isProduction = process.env.NODE_ENV === "production";
 
 export const config = {
@@ -111,8 +145,8 @@ export const config = {
   /** review-5 #4: a stored Paystack checkout is reused only while fresh;
    *  older pendings get a fresh reference + Initialize on the next attempt. */
   paystackCheckoutTtlMs: Number(process.env.PAYSTACK_CHECKOUT_TTL_MS ?? "") || 30 * 60_000,
-  /** web origin the browser lives on — SSO redirects + cookie scope (BFF) */
-  publicWebOrigin: process.env.PUBLIC_WEB_ORIGIN ?? "http://127.0.0.1:3000",
+  /** Web origin the browser lives on — email links, SSO redirects, cookie scope. */
+  publicWebOrigin: resolvePublicWebOrigin(isProduction),
   sso: parseSsoProviders(),
   ssoStateTtlMs: 10 * 60 * 1000,
   /** Behind a load balancer: set to the number of trusted proxies (express

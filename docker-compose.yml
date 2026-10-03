@@ -46,8 +46,7 @@ services:
       PAYSTACK_API_BASE: ${PAYSTACK_API_BASE:-https://api.paystack.co}
       SMTP_URL: ${SMTP_URL:-}
       MAIL_FROM: ${MAIL_FROM:-portal@school.example}
-      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
-      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      MAIL_REPLY_TO: ${MAIL_REPLY_TO:-}
       BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:?set in .env}
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:?set in .env}
       # Written by the backup sidecar; surfaced on /api/v1/health so a backup
@@ -79,11 +78,14 @@ services:
       NODE_ENV: production
       DATABASE_URL: postgres://portal_owner:${POSTGRES_OWNER_PASSWORD:?}@postgres:5432/portal
       APP_SECRET: ${APP_SECRET:?}
+      # The worker RENDERS the emails, so it needs the public origin as much as
+      # the API does. Without it every link in every message pointed at
+      # http://127.0.0.1:3000 — the recipient's own machine — while the portal
+      # itself looked perfectly healthy.
+      PUBLIC_WEB_ORIGIN: ${PUBLIC_WEB_ORIGIN:-https://portal.school.example}
       SMTP_URL: ${SMTP_URL:-}
       MAIL_FROM: ${MAIL_FROM:-portal@school.example}
-      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
-      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
-      VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:portal@school.example}
+      MAIL_REPLY_TO: ${MAIL_REPLY_TO:-}
       WORKER_INTERVAL_MS: "5000"
       # The worker processes roster import jobs, so it must see the same
       # uploaded files the API parked.
