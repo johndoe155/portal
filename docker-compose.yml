@@ -42,7 +42,7 @@ services:
       # caddy → web → api: two forwarding hops (review-2).
       TRUST_PROXY: ${TRUST_PROXY:-2}
       WORKER_INPROC: "false"
-      PAYSTACK_SECRET: ${PAYSTACK_SECRET:-}
+      PAYSTACK_SECRET_KEY: ${PAYSTACK_SECRET_KEY:-}
       PAYSTACK_API_BASE: ${PAYSTACK_API_BASE:-https://api.paystack.co}
       SMTP_URL: ${SMTP_URL:-}
       MAIL_FROM: ${MAIL_FROM:-portal@school.example}

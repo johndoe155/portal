@@ -10,6 +10,12 @@ import { backupFreshness } from "./backup-heartbeat";
 import { config } from "../config";
 
 /**
+ * Currencies Paystack actually settles. A school configured in anything else
+ * can issue invoices perfectly well — it just cannot take card payments.
+ */
+const PAYSTACK_CURRENCIES = new Set(["NGN", "GHS", "ZAR", "KES", "USD", "EGP", "XOF", "RWF"]);
+
+/**
  * Go-live readiness.
  *
  * The pilot runbook ends with a prose checklist — "confirm SMTP works",
@@ -284,6 +290,69 @@ export async function goLiveReadiness(db: Db): Promise<Readiness> {
         : "The purge has never completed. The retention policy published at /legal/retention is " +
           "not being enforced — most likely the worker process is not running.",
       fix: "/admin/retention",
+    });
+
+    /* ── Payments ─────────────────────────────────────────────────────── */
+
+    // The runbook said PAYSTACK_SECRET_KEY, the code read PAYSTACK_SECRET.
+    // Both names work now, but a school that set neither finds out on the
+    // first fee payment of the term, as a 503 the parent sees and the bursar
+    // cannot explain.
+    const secret = config.paystackSecret;
+    add({
+      id: "paystack_config", group: "Payments", label: "Online payments configured",
+      status: secret ? "pass" : "warn",
+      detail: secret
+        ? `Paystack secret key is set (${secret.slice(0, 8)}…).`
+        : "No Paystack secret key. Every attempt to pay a school fee online answers 503 " +
+          "'Payments not configured'. Fine if the school only takes cash and transfers — "
+          + "record those with 'Record payment' — but not if parents have been told to pay online.",
+      fix: "Set PAYSTACK_SECRET_KEY",
+    });
+
+    // A test key takes the payment and never moves any money.
+    const live = secret.startsWith("sk_live_");
+    add({
+      id: "paystack_mode", group: "Payments", label: "Payment keys are live keys",
+      status: !secret ? "warn" : live ? "pass" : config.isProduction ? "fail" : "warn",
+      detail: !secret
+        ? "No key set, so there is no mode to check."
+        : live
+          ? "Live Paystack key in use."
+          : "This is a TEST Paystack key. Parents will complete a checkout that looks real and " +
+            "the school will receive nothing.",
+      fix: "Use the sk_live_ key from the Paystack dashboard",
+    });
+
+    // school_settings.currency exists; it was ignored by the payment path
+    // until 0016. Flag the combination that cannot work.
+    const currency = (school?.currency || "NGN").toUpperCase();
+    add({
+      id: "paystack_currency", group: "Payments", label: "Fee currency is supported",
+      status: !secret ? "pass"
+        : PAYSTACK_CURRENCIES.has(currency) ? "pass" : "fail",
+      detail: PAYSTACK_CURRENCIES.has(currency)
+        ? `Fees are charged in ${currency}.`
+        : `The school currency is ${currency}, which Paystack does not settle. Every ` +
+          "online payment will be rejected by the gateway at checkout.",
+      fix: "/admin/school → currency, or disable online payments",
+    });
+
+    /* ── Addressing ───────────────────────────────────────────────────── */
+
+    // The worker renders every email, and its compose env never set this, so
+    // every link in every message pointed at the recipient's own machine.
+    const origin = config.publicWebOrigin;
+    const loopback = /^https?:\/\/(localhost|127\.|0\.0\.0\.0|\[::1\])/i.test(origin);
+    add({
+      id: "public_origin", group: "Email", label: "Email links point at the real portal",
+      status: loopback ? "fail" : /^https:\/\//i.test(origin) ? "pass" : "warn",
+      detail: loopback
+        ? `PUBLIC_WEB_ORIGIN is ${origin}. Every password reset, invitation and parent-access ` +
+          "link we send points at the recipient's own computer. Check the WORKER's environment, " +
+          "not just the API's — the worker is what renders the mail."
+        : `Links are built from ${origin}.`,
+      fix: "Set PUBLIC_WEB_ORIGIN on the api AND worker services",
     });
   });
 

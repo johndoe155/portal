@@ -156,7 +156,7 @@ npm run smoke -w @portal/web        # web e2e-ish smoke (21) — needs both serv
 ### Deviations & production notes (5.4)
 
 1. **Paystack Initialize** (checkout `auth_url`) is stubbed — `initiate` returns the reference; wiring the live `POST https://api.paystack.co/transaction/initialize` + secret key is a config step. The webhook half of the loop is fully functional and tested.
-2. `PAYSTACK_SECRET` must be set in production (unset ⇒ webhook returns 503 `webhook_not_configured`); dev/smoke use `sk_test_dev_secret`.
+2. `PAYSTACK_SECRET_KEY` must be set in production (unset ⇒ payments and the webhook return 503); `PAYSTACK_SECRET` is still read as a legacy alias. Dev/smoke use `sk_test_dev_secret`. The charge currency comes from `school_settings.currency` and is stored on the payment row (0016); the webhook compares against that, not the live setting.
 3. Money is integer kobo end-to-end — no float currency anywhere (NGN correctness).
 4. Transport "capacity" is recorded but not yet enforced against assignment count — flagged for the ops backlog.
 5. Playwright e2e remains deferred (node:test + supertest + 43-check smoke cover the flows); k6 not executed in-sandbox.

@@ -138,8 +138,17 @@ export const config = {
   sessionTtlHoursUser: 24,
   sidCookie: "sid",
   csrfCookie: "csrf",
-  /** Paystack webhook HMAC SHA-512 secret; unset ⇒ webhook returns 503 */
-  paystackSecret: process.env.PAYSTACK_SECRET ?? "",
+  /**
+   * Paystack secret key — signs Initialize calls and verifies webhook HMACs;
+   * unset ⇒ payments return 503.
+   *
+   * PAYSTACK_SECRET_KEY is the canonical name (it is what Paystack's own
+   * docs and the pilot runbook use). PAYSTACK_SECRET is kept as an alias
+   * because the code originally read only that, and the two names disagreeing
+   * is precisely how a school ends up with a portal that 503s on the first
+   * school-fee payment of the term with nothing in the logs to explain it.
+   */
+  paystackSecret: process.env.PAYSTACK_SECRET_KEY ?? process.env.PAYSTACK_SECRET ?? "",
   /** Paystack REST base (override points at a mock in tests). */
   paystackApiBase: process.env.PAYSTACK_API_BASE ?? "https://api.paystack.co",
   /** review-5 #4: a stored Paystack checkout is reused only while fresh;

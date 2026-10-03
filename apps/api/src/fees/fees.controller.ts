@@ -8,7 +8,7 @@ import { and, eq, isNull, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
 import { DB_TOKEN } from "../db/token";
 import { withActor, SERVICE } from "../db/actor";
-import { feeInvoices, feePayments, feeTemplates, guardians, students, users } from "../db/schema";
+import { feeInvoices, feePayments, feeTemplates, guardians, schoolSettings, students, users } from "../db/schema";
 import { Perm, ParentWrite } from "../common/guards";
 import { insertAudit } from "../common/audit";
 import { config } from "../config";
@@ -49,6 +49,35 @@ export class FeesController {
     return withActor(this.db, { userId: p.userId, role: p.activeRole }, async (tx) => {
       await this.assertGuardian(tx, p.userId, id);
     }).then(() => this.ledgerFor(id, p));
+  }
+
+  /**
+   * Where a payer lands when they come back from Paystack.
+   *
+   * Initialize now sends callback_url=ORIGIN/fees/return, and that page needs
+   * to answer one question: did the school get my money? It cannot ask
+   * Paystack — the payer's browser holds no gateway credentials — and it must
+   * not trust the query string Paystack appends, which the payer can edit.
+   * So it asks us, and we answer from the row the signed webhook updated.
+   *
+   * "pending" is the honest answer while the webhook is in flight; the page
+   * polls. Scoped to the payer: you can only look up a reference you started.
+   */
+  @Get("fees/payments/:reference/status")
+  async paymentStatus(@Req() req: Request, @Param("reference") reference: string) {
+    const p = req.principal!;
+    return withActor(this.db, SERVICE, async (tx) => {
+      const [pay] = await tx.select().from(feePayments)
+        .where(eq(feePayments.gatewayRef, reference)).limit(1);
+      if (!pay || pay.paidBy !== p.userId) throw new NotFoundException({ code: "not_found" });
+      const [inv] = await tx.select({ status: feeInvoices.status, label: feeInvoices.label })
+        .from(feeInvoices).where(eq(feeInvoices.id, pay.invoiceId)).limit(1);
+      return {
+        reference, status: pay.status, amount_kobo: Number(pay.amountKobo),
+        currency: pay.currency, paid_at: pay.paidAt?.toISOString() ?? null,
+        invoice_label: inv?.label ?? null, invoice_status: inv?.status ?? null,
+      };
+    });
   }
 
   @Post("fees/invoices")
@@ -140,8 +169,8 @@ export class FeesController {
       return { reference: prepared.reference, amount_kobo: prepared.amountKobo,
         checkout_url: prepared.checkoutUrl ?? null, access_code: prepared.accessCode ?? null };
     }
-    const { checkoutUrl, accessCode } =
-      await this.paystackInitialize(p, prepared.reference, prepared.amountKobo);
+    const { checkoutUrl, accessCode } = await this.paystackInitialize(
+      p, prepared.reference, prepared.amountKobo, prepared.currency);
     await withActor(this.db, actor, async (tx: any) => {
       // review-4 #2: persist the checkout so retries reuse it (never re-init)
       await tx.update(feePayments).set({ checkoutUrl, accessCode })
@@ -165,6 +194,12 @@ export class FeesController {
    * lands on a superseded reference surfaces as webhook `unknown_reference`.
    */
   private async preparePayment(tx: any, inv: any, p: any, ip?: string) {
+    // The school's configured currency, not a hardcoded "NGN". It is read
+    // here, inside the prepare transaction, and stored on the row so the
+    // webhook compares against the currency we actually charged in.
+    const [settings] = await tx.select({ currency: schoolSettings.currency })
+      .from(schoolSettings).where(eq(schoolSettings.id, 1)).limit(1);
+    const currency = (settings?.currency || "NGN").toUpperCase();
     const [sumRow] = await tx.select({ total: sql<number>`COALESCE(SUM(amount_kobo),0)::bigint` })
       .from(feePayments)
       .where(and(eq(feePayments.invoiceId, inv.id), eq(feePayments.status, "success")));
@@ -187,7 +222,8 @@ export class FeesController {
         entityType: "fee_payment", entityId: openPending.id,
         after: { reference: openPending.gatewayRef, reused: true }, ip });
       return { reused: true as const, payId: openPending.id, reference: openPending.gatewayRef,
-        amountKobo: remaining, checkoutUrl: openPending.checkoutUrl as string | null,
+        amountKobo: remaining, currency: openPending.currency as string,
+        checkoutUrl: openPending.checkoutUrl as string | null,
         accessCode: openPending.accessCode as string | null };
     }
     // No reusable pending row (none, pre-0006 legacy without a stored
@@ -200,24 +236,26 @@ export class FeesController {
       // session for the TTL check; without this a refreshed row would read as
       // stale forever and every retry would burn a new reference
       await tx.update(feePayments)
-        .set({ gatewayRef: reference, amountKobo: remaining, paidBy: p.userId,
+        .set({ gatewayRef: reference, amountKobo: remaining, paidBy: p.userId, currency,
           checkoutUrl: null, accessCode: null, createdAt: new Date() })
         .where(eq(feePayments.id, openPending.id));
       payId = openPending.id;
     } else {
       const [pay] = await tx.insert(feePayments).values({
-        id: randomUUID(), invoiceId: inv.id, amountKobo: remaining,
+        id: randomUUID(), invoiceId: inv.id, amountKobo: remaining, currency,
         channel: "paystack", gatewayRef: reference, paidBy: p.userId,
       }).returning();
       payId = pay.id;
     }
-    return { reused: false as const, payId, reference, amountKobo: remaining,
+    return { reused: false as const, payId, reference, amountKobo: remaining, currency,
       checkoutUrl: null, accessCode: null };
   }
 
   /** Paystack Initialize Transaction — pure HTTP, no DB transaction held. */
-  private async paystackInitialize(p: any, reference: string, amountKobo: number) {
-    const secret = process.env.PAYSTACK_SECRET ?? config.paystackSecret;
+  private async paystackInitialize(
+    p: any, reference: string, amountKobo: number, currency: string,
+  ) {
+    const secret = config.paystackSecret;
     if (!secret) {
       throw new HttpException({ code: "paystack_not_configured", status: 503,
         title: "Payments not configured", detail: "PAYSTACK_SECRET is not set" },
@@ -234,7 +272,14 @@ export class FeesController {
         headers: { authorization: `Bearer ${secret}`, "content-type": "application/json" },
         body: JSON.stringify({
           email: p.email ?? "noreply@school.example",
-          amount: amountKobo, reference, currency: "NGN",
+          amount: amountKobo,
+          reference,
+          currency,
+          // Without a callback_url Paystack drops the payer on its own
+          // generic "payment complete" page and they are simply stranded —
+          // no way back to the portal, no confirmation that the school knows.
+          // This page waits for the webhook and tells them what happened.
+          callback_url: `${config.publicWebOrigin}/fees/return`,
         }),
       });
       init = await res.json() as typeof init;
@@ -387,12 +432,16 @@ export class FeesController {
       if (pay.status === "success") return { duplicate: true };
       // review-3 #7: the payload is UNTRUSTED input (a valid signature proves
       // origin, not correctness). We initiated the charge with OUR amount in
-      // NGN — anything else is anomalous: fail the row, audit, never post it.
-      if (payloadCurrency !== "NGN") {
+      // OUR currency — anything else is anomalous: fail the row, audit,
+      // never post it. The comparison is against the currency stored on the
+      // payment row, not the live school setting: a bursar who switches
+      // currency mid-term must not fail every in-flight payment.
+      const expectedCurrency = (pay.currency || "NGN").toUpperCase();
+      if (payloadCurrency.toUpperCase() !== expectedCurrency) {
         await tx.update(feePayments).set({ status: "failed" }).where(eq(feePayments.id, pay.id));
         await insertAudit(tx, { actorUserId: null, action: "webhook.currency_mismatch",
           entityType: "fee_payment", entityId: pay.id,
-          after: { reference, currency: payloadCurrency.slice(0, 8) } });
+          after: { reference, currency: payloadCurrency.slice(0, 8), expected: expectedCurrency } });
         return { rejected: true, reason: "currency_mismatch" };
       }
       if (payloadAmount !== Number(pay.amountKobo)) {

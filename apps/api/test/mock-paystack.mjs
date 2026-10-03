@@ -7,6 +7,9 @@
 import { createServer } from "node:http";
 
 export function startMockPaystack(port) {
+  /** Every Initialize body we were sent, so tests can assert what we actually
+   *  put on the wire (currency, callback_url) rather than only the response. */
+  const initializeCalls = [];
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, `http://127.0.0.1:${port}`);
     try {
@@ -21,6 +24,7 @@ export function startMockPaystack(port) {
             .end(JSON.stringify({ status: false, message: "Invalid key" }));
           return;
         }
+        initializeCalls.push(body);
         if (!body.amount || !body.reference) {
           res.writeHead(400, { "content-type": "application/json" })
             .end(JSON.stringify({ status: false, message: "amount and reference are required" }));
@@ -42,6 +46,8 @@ export function startMockPaystack(port) {
       res.writeHead(500).end(String(err));
     }
   });
+  server.initializeCalls = initializeCalls;
+  server.lastInitialize = () => initializeCalls[initializeCalls.length - 1];
   return new Promise((resolve) => server.listen(port, "127.0.0.1", () => resolve(server)));
 }
 

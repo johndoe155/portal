@@ -380,6 +380,10 @@ export const feePayments = pgTable("fee_payments", {
   // of re-initializing the same reference (real Paystack rejects duplicates).
   checkoutUrl: text("checkout_url"),
   accessCode: text("access_code"),
+  /* 0016: the currency this charge was raised in, copied from
+     school_settings at Initialize. The webhook compares against THIS, not
+     against the live setting, which may have changed since. */
+  currency: text("currency").notNull().default("NGN"),
   status: text("status").notNull().default("pending"),
   paidBy: uuid("paid_by"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

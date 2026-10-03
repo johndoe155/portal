@@ -5,7 +5,7 @@
 
 ## 0. Provisioning (once, per ADR-010)
 - Web (Vercel, `dub1`), API + worker containers (Railway/Render), Postgres (Supabase/Neon, eu-west-1), R2 for backups.
-- Set: `DATABASE_URL`, `APP_SECRET` (≥32 chars), `PUBLIC_WEB_ORIGIN`, `COOKIE_SECURE=true`, `TRUST_PROXY=2`, `PAYSTACK_SECRET_KEY`, and for email `SMTP_URL` (until then links are shown to admins instead of mailed).
+- Set: `DATABASE_URL`, `APP_SECRET` (≥32 chars), `PUBLIC_WEB_ORIGIN` (on the **api and worker** — the worker renders the mail, and the API refuses to boot in production if it is unset, loopback or non-https), `COOKIE_SECURE=true`, `TRUST_PROXY=2`, `PAYSTACK_SECRET_KEY` (the `sk_live_` one — a test key gives parents a checkout that looks real and moves no money), and for email `SMTP_URL` (until then links are shown to admins instead of mailed).
 - **Never** set `SEED_DEMO=true` in production — the API refuses to boot with it.
 
 ## 1. Bootstrap the first admin
@@ -48,7 +48,9 @@ Without an SMTP server configured, set-password links are listed in the import r
 ## 6. Fees — `/admin/fees`
 1. Add fee **templates** (name, amount, grade scope, due-in days).
 2. **Generate** for a term — one invoice per active student in scope. Re-generating never double-charges: existing (student, term, label) pairs are skipped.
-3. Parents pay through the Paystack checkout; the webhook marks invoices paid.
+3. Parents pay through the Paystack checkout; the webhook marks invoices paid. Paystack returns them to `PUBLIC_WEB_ORIGIN/fees/return`, which polls until the webhook lands and tells them whether the school has the money — so `PUBLIC_WEB_ORIGIN` must be correct on **both** the api and worker services.
+4. The charge is raised in the school's own currency (step 2, `/admin/school`), not hardcoded to naira, and the currency used is recorded on each payment so changing the setting mid-term cannot break payments already in flight. Paystack settles NGN, GHS, ZAR, KES, USD, EGP, XOF and RWF; anything else means invoices only, no online payment. `/reports/go-live` checks this.
+5. **Cash and bank transfers** are recorded with *Record payment* on the invoice — they do not touch Paystack. A school that takes no card payments can leave `PAYSTACK_SECRET_KEY` unset; the go-live screen downgrades it to a warning.
 
 ## 7. Grading — `/admin/academics` → Grading scale
 Set the school's bands (letter, min %, point) and exam/coursework weights. Stored sorted, and **used**: report-card generation applies the weights (exam vs coursework) to produce per-subject percentages, letters and points, plus an overall average/GPA. The scale in force is baked into each snapshot. Report cards are generated **per term** — the term must be chosen explicitly.
