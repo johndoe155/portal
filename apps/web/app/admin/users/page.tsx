@@ -3,6 +3,7 @@ import { requireRole, apiGet } from "@/lib/session";
 import Shell from "@/components/shell";
 import NewUser from "./new-user";
 import InvitesPanel from "./invites-panel";
+import MfaRollout from "./mfa-rollout";
 
 interface UserRow { id: string; email: string; displayName: string; status: string }
 interface UsersRes { data: UserRow[]; meta: { page: number; per: number; total: number } }
@@ -20,6 +21,7 @@ export default async function AdminUsers({ searchParams }: { searchParams: Promi
       <h1>User directory</h1>
       <p className="muted">{total} account(s) · page {page} of {pages}</p>
       <NewUser />
+      <MfaRollout />
       <InvitesPanel />
       <div className="card">
         <table>
