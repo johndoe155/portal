@@ -5,19 +5,41 @@ import { useEffect, useState } from "react";
 import type { SessionView } from "@/lib/session";
 import { api } from "@/lib/client";
 
-const TABS: Record<string, { href: string; label: string }[]> = {
+interface Tab { href: string; label: string; perm?: string }
+
+/**
+ * Navigation is keyed by AREA (admin/teacher/student/parent), but a session
+ * carries a ROLE ("school_admin", "registrar", "auditor", …). Indexing the
+ * tab table directly with the role silently fell through to the student tabs,
+ * so every administrator saw "Dashboard | Grades" and had no way to reach the
+ * admin console at all. Roles are mapped to their area explicitly here.
+ */
+const ROLE_AREA: Record<string, string> = {
+  super_admin: "admin", school_admin: "admin", registrar: "admin",
+  auditor: "admin", counselor: "admin",
+  teacher: "teacher", teacher_assistant: "teacher",
+  student: "student", parent: "parent",
+};
+
+/**
+ * `perm` hides a tab the role cannot use. An auditor has audit:read but not
+ * fees:read, and a link that only ever produces "Forbidden" is worse than no
+ * link — it looks like something is broken.
+ */
+const TABS: Record<string, Tab[]> = {
   admin: [
     { href: "/admin", label: "Overview" },
-    { href: "/admin/users", label: "Users" },
-    { href: "/admin/students", label: "Students" },
-    { href: "/admin/sections", label: "Sections" },
-    { href: "/admin/academics", label: "Academics" },
-    { href: "/admin/fees", label: "Fees" },
-    { href: "/admin/transport", label: "Transport" },
-    { href: "/admin/import", label: "Import" },
-    { href: "/admin/reports", label: "Reports" },
-    { href: "/admin/notifications", label: "Email" },
-    { href: "/admin/school", label: "School" },
+    { href: "/admin/users", label: "Users", perm: "directory:read" },
+    { href: "/admin/students", label: "Students", perm: "directory:read" },
+    { href: "/admin/sections", label: "Sections", perm: "academics:read" },
+    { href: "/admin/academics", label: "Academics", perm: "academics:read" },
+    { href: "/admin/fees", label: "Fees", perm: "fees:read" },
+    { href: "/admin/transport", label: "Transport", perm: "transport:read" },
+    { href: "/admin/import", label: "Import", perm: "directory:write" },
+    { href: "/admin/reports", label: "Reports", perm: "directory:read" },
+    { href: "/admin/notifications", label: "Email", perm: "audit:read" },
+    { href: "/admin/audit", label: "Activity log", perm: "audit:read" },
+    { href: "/admin/school", label: "School", perm: "settings:write" },
   ],
   teacher: [
     { href: "/teacher", label: "Sections" },
@@ -30,8 +52,9 @@ const TABS: Record<string, { href: string; label: string }[]> = {
 export default function Shell({ session, children }: { session: SessionView; children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const role = TABS[session.activeRole] ? session.activeRole : "student";
-  const tabs = TABS[role] ?? [];
+  const area = ROLE_AREA[session.activeRole] ?? "student";
+  const perms = new Set(session.permissions ?? []);
+  const tabs = (TABS[area] ?? []).filter((t) => !t.perm || perms.has(t.perm));
   // phase 6: brand comes from school settings (public endpoint)
   const [brand, setBrand] = useState("School Portal");
   useEffect(() => {

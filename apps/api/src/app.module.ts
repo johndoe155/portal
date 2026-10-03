@@ -18,6 +18,7 @@ import { TransportController } from "./transport/transport.controller";
 import { HealthController } from "./health/health.controller";
 import { SchoolController } from "./school/school.controller";
 import { ImportController } from "./import/import.controller";
+import { AuditController } from "./audit/audit.controller";
 
 @Module({})
 export class AppModule {
@@ -29,7 +30,7 @@ export class AppModule {
         AttendanceController, GradebookController, StudentController,
         MessagingController, NotifyController, ReportsController, SsoController,
         FeesController, ExamsController, TransportController, HealthController,
-        SchoolController, ImportController,
+        SchoolController, ImportController, AuditController,
       ],
       providers: [AuthService, { provide: DB_TOKEN, useValue: db }],
     };
