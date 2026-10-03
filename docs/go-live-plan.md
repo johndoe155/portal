@@ -6,6 +6,13 @@ run on Monday morning — without weakening the security foundation already in p
 
 ---
 
+> **Status: delivered 2026-10-03.** Every phase below is implemented, tested
+> and merged. The counts quoted in the original plan ("73 tests", "around
+> 120–140 by the end") are superseded: the suite is **229 API tests** plus 56
+> web smoke checks, and CI runs them along with a real-Postgres migration pass,
+> a `docker build`, a full backup→encrypt→restore drill and `npm audit`. The
+> five items under *What I cannot do from here* remain with the school.
+
 ## 0. What I verified before writing this
 
 I unzipped `school-portal.zip`, installed, built and ran the suite. Baseline:
@@ -19,7 +26,7 @@ I unzipped `school-portal.zip`, installed, built and ran the suite. Baseline:
 | `npm audit` | ❌ 1 **high** — drizzle-orm `<0.45.2` SQL injection (GHSA-gpj5-g38j-94v9) |
 | `Dockerfile` line 27 | ❌ `COPY scripts scripts  # comment` → confirmed broken |
 | `.env.example` | ❌ **does not exist** — README and `docker-compose.yml` both reference it |
-| `.github/` CI | ❌ **does not exist** — docs claim "k6 as a real CI gate" |
+| `.github/` CI | ❌ **did not exist** — docs claimed "k6 as a real CI gate". Now `.github/workflows/ci.yml` |
 
 So on top of your list there are **four more day-one problems**: the test command
 is broken, there's a high-severity dependency CVE, the env file every document

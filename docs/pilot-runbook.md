@@ -18,6 +18,12 @@
 Name, logo URL, colours, contact + DPO email, timezone, currency, mail sender.
 The login page, navigation and legal pages pick this up immediately (the endpoint is public before authentication).
 
+The **DPO email is not optional**: `/legal/privacy` and `/legal/retention` tell
+data subjects to write to it, and with no address configured those pages
+describe rights nobody can exercise. The go-live check (§8) blocks until it is
+set, and the legal pages say outright that no contact exists rather than hiding
+it.
+
 ## 3. Calendar — `/admin/academics`
 Create the academic year (mark current) and its terms. Terms drive fee generation and reporting.
 
@@ -50,14 +56,31 @@ Set the school's bands (letter, min %, point) and exam/coursework weights. Store
 **Inviting students individually?** Set the grade level **on the invite** — an invitee cannot supply their own grade or admission number (a made-up number would collide with the real roster later).
 
 ## 8. Go-live gate — `/admin/reports`
-The reconciliation report is the acceptance checklist:
+
+Two checks live on this page.
+
+**Go-live readiness** runs everything this runbook asks you to confirm and
+shows the result. It used to be prose here, which meant nobody ran it:
+
+- **Blocking** (`✕`) — school name and DPO address set, `SMTP_URL` configured,
+  a recent backup exists and is off-host, `APP_SECRET` set, `SEED_DEMO` off,
+  current academic year and terms, pupils on the roll. Each failure says where
+  to go and fix it.
+- **Worth fixing** (`!`) — staff still to enrol in two-factor, pupils with no
+  guardian or no class, empty classes, a single administrator, an untested
+  restore, a stalled retention purge.
+
+Nothing blocking may be outstanding on the first day. The warnings will not
+stop the school working, but somebody will notice each one.
+
+**Reconciliation** is the roster acceptance checklist:
 - every class shows its true head-count;
 - no *students without a verified guardian*;
 - no *students without enrolments*;
 - no *parents with no child linked*;
 - pending guardian links worked to zero.
 
-Only when this page is clean should the school stop using its old spreadsheet. From that moment the portal is the system of record (ADR-013).
+Only when both are clean should the school stop using its old spreadsheet. From that moment the portal is the system of record (ADR-013).
 
 ## 9. First week operations
 - **Backups** — the `backup` service takes a nightly AES-256 encrypted `pg_dump`
@@ -69,8 +92,25 @@ Only when this page is clean should the school stop using its old spreadsheet. F
 - **Monitoring** — alert on `/api/v1/health` returning a non-empty `warnings[]`.
   That single check covers stalled backups, failed restore drills, undeliverable
   email and a stuck notification outbox.
+- **Email** — `/admin/notifications` is the bounce view. Anything in *failed* or
+  *dead* is mail that never arrived; retries back off over roughly 17 hours
+  before a message is declared dead, so a row sitting there is a real problem
+  (usually a wrong address or an SPF/DKIM rejection), not a transient one.
+- **Two-factor rollout** — `/admin/users` → *Two-factor rollout* shows coverage
+  and issues enrolment tokens for everyone outstanding in one action, with a
+  printable sheet for the staff meeting where it realistically happens. Do not
+  turn on enforcement until coverage is 100%.
+- **Leavers** — `/admin/users` → a user's *Offboard* preview lists what they
+  still hold (classes taught, children linked, unpaid invoices) before you
+  deactivate. Deactivation is reversible; erasure is not.
+- **Retention** — `/admin/retention` shows the windows in force, when the purge
+  last ran and what it removed, and is where an erasure request is carried out.
+  The purge runs in the worker: if the worker is not running, the policy
+  published at `/legal/retention` is not being honoured, and the screen says so.
 - Staff TOTP resets: `scripts/mfa-token.mjs <email>` (requires the admin endpoint or ops CLI).
-- Watch `audit_log` for `guardian_link.*`, `fee.*`, `import.*` actions — every phase-6 write is audited.
+- **Activity log** — `/admin/audit`: every write is recorded with actor,
+  before/after and a hash chain. *Verify* re-computes the chain and reports any
+  row that has been tampered with.
 
 ## 10. End of the academic year — `/admin/academics` → End-of-year rollover
 

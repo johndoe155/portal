@@ -116,3 +116,33 @@ identity, demo card removed, verify page gated).
 | 5 | Import results capped at 500 rows | every problem row returned (ok rows omitted except those carrying set-password links) | phase56 (600/600 listed) |
 
 Suites after round 6: unit **75/75** · smoke **56/56** · bootstrap-live **39/39**.
+
+---
+
+## Phase 7 — go-live hardening (2026-10-03)
+
+Status: ✅ complete. Plan and rationale: [`docs/go-live-plan.md`](./go-live-plan.md).
+
+Phases 1–6 built a portal that demonstrates well. This phase fixed the places
+where it made a promise it could not keep — the failures a school hits on day
+one rather than the ones a reviewer finds in the code.
+
+| # | What was wrong | What it is now |
+| --- | --- | --- |
+| A1 | `Dockerfile` line 27 had a trailing `#` on a `COPY`, so the image could never build | Fixed, and CI builds the image on every push so it cannot silently break again |
+| A2 | Every email was `JSON.stringify(payload)` — a parent's password-reset arrived as a raw object dump | Branded HTML + plain-text templates per notification kind, rendered from school settings |
+| A3 | No SMTP transport at all | Provider-agnostic nodemailer over `SMTP_URL`, connection verified at worker start-up, with the exact SPF/DKIM/DMARC records to publish in [`docs/email-setup.md`](./email-setup.md) |
+| A4 | One SMTP hiccup set a notification to `failed` forever | Retry with jittered backoff (1→5→15→60→240→720 min), `dead` state when exhausted, dead-letter screen at `/admin/notifications` with requeue |
+| A5 | Roster import sent the whole CSV as one JSON body — a real school's file hit the 1 MB cap and the proxy timeout | Multipart upload → background job with batching, progress polling, resumability, cancel, downloadable error CSV and one-time credentials CSV |
+| A6 | Backups were unencrypted, local-only, 14 dumps, unscheduled and never restore-tested, while the runbook claimed otherwise | AES-256 encrypted nightly `pg_dump`, off-host upload with verification, 35-day retention, weekly restore drill into a throwaway database, both surfaced on `/api/v1/health` |
+| A7 | The legal pages promised a purge, an erasure right and a DPO contact, none of which existed | Daily retention purge (audited, previewable, idempotent) · erasure as irreversible anonymisation with the statutory carve-out shown before committing · the configured DPO address rendered on `/legal/*`, with the absence of one stated plainly |
+| B1 | No way to offboard anybody — a teacher who resigned kept working credentials | `/users/:id/offboard-preview` + reversible `deactivate`/`reactivate`, blocked on the last super admin |
+| B2 | `audit:read` existed as a permission with nothing to read | `/admin/audit`: filters, readable actions, before/after, hash-chain verification, CSV export |
+| B3 | Nothing for promotion or year rollover — the portal was a one-year tool | `/admin/academics` → End-of-year rollover: preview, per-pupil overrides, idempotent commit, undo |
+| B4 | MFA enrolment tokens were issued one person at a time | Coverage view + bulk issue for everyone outstanding, email or printable sheet |
+| C1–C4 | Only the zip was tracked; `npm test` failed on the supported Node; a high-severity drizzle advisory; no `.env.example` | Source tree committed, test command fixed, dependency bumped, every variable documented |
+| C5 | Docs claimed a CI gate; there was no `.github/` | `.github/workflows/ci.yml`: build + test, migrations against real Postgres (twice, for idempotency), `docker build`, a full backup→encrypt→restore drill, `npm audit --audit-level=high` |
+| C6 | The go-live checklist was prose in a runbook | `/admin/reports` → Go-live readiness: the same checklist, executed, with blocking vs advisory severity and a link to the fix |
+| C7 | README/roadmap/runbook quoted stale test counts and backup behaviour that did not exist | Corrected throughout |
+
+Suites after phase 7: API **229/229** · web smoke **56/56**.

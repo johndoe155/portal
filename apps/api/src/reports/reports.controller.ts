@@ -10,6 +10,7 @@ import {
   attendanceRecords, attendanceSessions, guardians, students, users, userRoles,
 } from "../db/schema";
 import { Perm } from "../common/guards";
+import { goLiveReadiness } from "../ops/go-live.service";
 import { insertAudit } from "../common/audit";
 import { ReportGenerateBody } from "@portal/contracts";
 import type { Request } from "express";
@@ -26,6 +27,18 @@ export class ReportsController {
    * parents with no child, students with no guardian/enrolment, unverified
    * links. Admin-tier only (directory:read + role gate).
    */
+  @Get("reports/go-live")
+  @Perm("directory:read")
+  async goLive(@Req() req: Request) {
+    const p = req.principal!;
+    if (!ADMIN_ROLES.has(p.activeRole)) {
+      throw new ForbiddenException({ code: "admin_only" });
+    }
+    // The runbook's prose checklist, executed. See go-live.service.ts for why
+    // each check is a failure rather than a warning.
+    return goLiveReadiness(this.db);
+  }
+
   @Get("reports/reconciliation")
   @Perm("directory:read")
   async reconciliation(@Req() req: Request) {

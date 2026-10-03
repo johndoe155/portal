@@ -1,0 +1,216 @@
+name: CI
+
+# The docs claimed a CI gate for several phases while there was no .github
+# directory at all. These are the things that have actually broken in this
+# repository — a Dockerfile that would not build, a migration that only ran
+# against PGlite, a backup script nobody had executed — so each one gets a job
+# rather than a line in a runbook.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Keep the toolchain pinned to what package.json's engines field allows and
+  # what the Dockerfile ships, so CI cannot pass on a Node the image lacks.
+  NODE_VERSION: "22"
+
+jobs:
+  # ── Build and the API suite ────────────────────────────────────────────────
+  build-test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Build (contracts → api → web)
+        run: npm run build
+
+      - name: API test suite
+        # The suite runs against PGlite in-process; no services needed.
+        # `rm -rf apps/api/data` because a leftover PGlite directory from a
+        # previous run makes tests fail in ways that look like real bugs.
+        run: |
+          rm -rf apps/api/data
+          npm test
+
+      - name: Upload build output on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            apps/api/dist
+            apps/web/.next/build-manifest.json
+          retention-days: 3
+          if-no-files-found: ignore
+
+  # ── Migrations against a real Postgres ─────────────────────────────────────
+  # The test suite runs on PGlite. PGlite is close to Postgres but not
+  # identical, and the schema leans hard on row-level security, partial unique
+  # indexes and policy expressions. A migration that works on PGlite and fails
+  # on Postgres would only be discovered on the school's server.
+  migrations-postgres:
+    name: Migrations on real Postgres
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: ci
+          POSTGRES_USER: ci
+          POSTGRES_DB: portal
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build -w @portal/contracts && npm run build -w @portal/api
+
+      - name: Apply every migration, twice
+        # verify-pg.mjs asserts the second run applies nothing: migrations must
+        # be idempotent, because a redeploy runs them again.
+        env:
+          DATABASE_URL: postgres://ci:ci@localhost:5432/portal
+        run: node scripts/verify-pg.mjs
+
+  # ── The container actually builds ──────────────────────────────────────────
+  # The Dockerfile shipped with a stray '#' on a COPY line, so the image could
+  # never be built at all. Nothing catches that except building it.
+  docker:
+    name: Docker image builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: portal:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Image starts and reports its version
+        run: docker run --rm --entrypoint node portal:ci --version
+
+  # ── Backup and restore, end to end ─────────────────────────────────────────
+  # The runbook promised encrypted, off-host, restore-tested backups. The only
+  # way to know the scripts still do that is to run them: dump a real database,
+  # encrypt it, restore it into a scratch one and check the data survived.
+  backup-restore:
+    name: Backup and restore drill
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: ci
+          POSTGRES_USER: ci
+          POSTGRES_DB: portal
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://ci:ci@localhost:5432/portal
+      BACKUP_ENCRYPTION_KEY: ci-only-not-a-real-key-0123456789
+      BACKUP_DIR: ./backups
+      BACKUP_HEARTBEAT_FILE: ./data/last-backup.json
+      BACKUP_VERIFY_FILE: ./data/last-restore-test.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Postgres client tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+
+      - run: npm ci
+      - run: npm run build -w @portal/contracts && npm run build -w @portal/api
+
+      - name: Populate a schema worth backing up
+        run: node scripts/verify-pg.mjs
+
+      - name: Take a backup
+        run: ./scripts/backup.sh
+
+      - name: Heartbeat is written and the dump is encrypted
+        run: |
+          set -euo pipefail
+          test -s "$BACKUP_HEARTBEAT_FILE" || { echo "no heartbeat written"; exit 1; }
+          cat "$BACKUP_HEARTBEAT_FILE"
+          node -e '
+            const h = require("fs").readFileSync(process.env.BACKUP_HEARTBEAT_FILE, "utf8");
+            const j = JSON.parse(h);
+            if (!j.completed_at || !j.sha256) { console.error("heartbeat incomplete", j); process.exit(1); }
+            if (j.encrypted !== true) { console.error("backup is NOT encrypted"); process.exit(1); }
+          '
+          # A plaintext dump would contain the string "PostgreSQL database dump".
+          dump="$(ls -1t "$BACKUP_DIR"/*.dump.enc | head -1)"
+          if grep -aq "PostgreSQL database dump" "$dump"; then
+            echo "FAIL: the stored backup is readable plaintext"; exit 1
+          fi
+
+      - name: Restore drill
+        run: ./scripts/backup-verify.sh
+
+      - name: Drill result is recorded for /api/v1/health
+        run: |
+          set -euo pipefail
+          test -s "$BACKUP_VERIFY_FILE" || { echo "no drill result written"; exit 1; }
+          cat "$BACKUP_VERIFY_FILE"
+          node -e '
+            const j = JSON.parse(require("fs").readFileSync(process.env.BACKUP_VERIFY_FILE, "utf8"));
+            if (j.result !== "passed") { console.error("restore drill did not pass", j); process.exit(1); }
+          '
+
+  # ── Dependency advisories ──────────────────────────────────────────────────
+  audit:
+    name: npm audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      # High and critical advisories fail the build. This repository shipped a
+      # known SQL-injection advisory in drizzle-orm; nothing told anyone.
+      - run: npm audit --audit-level=high

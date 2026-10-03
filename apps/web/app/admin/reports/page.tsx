@@ -1,5 +1,6 @@
 import { requireRole, apiGet } from "@/lib/session";
 import Shell from "@/components/shell";
+import GoLive from "./go-live";
 
 interface Recon {
   sections: { id: string; name: string; course: string; head_count: number }[];
@@ -14,8 +15,14 @@ export default async function AdminReports() {
   const rep = await apiGet<Recon>("/reports/reconciliation");
   return (
     <Shell session={session}>
-      <h1>Reconciliation</h1>
-      <p className="muted">Run this before go-live: every class should have its head-count, every child a guardian, every parent a child.</p>
+      <h1>Readiness</h1>
+      <p className="muted">
+        Everything the runbook says to confirm before a real pupil touches this portal, checked
+        automatically — then the roster reconciliation underneath.
+      </p>
+      <GoLive />
+      <h2>Reconciliation</h2>
+      <p className="muted">Every class should have its head-count, every child a guardian, every parent a child.</p>
       {!rep ? <p className="muted">Report unavailable.</p> : (
         <>
           <div className="card">

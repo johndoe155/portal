@@ -37,6 +37,13 @@ export class ProblemFilter implements ExceptionFilter {
       detail = "The API accepts at most 1 MB of JSON. For roster files use the file upload " +
         "(POST /api/v1/import/<kind>/upload), which streams the file and runs as a " +
         "background job — it is the path designed for whole-school data.";
+    } else if (pgCode === "22P02" || /invalid input syntax for type uuid/.test(String((exception as any)?.cause?.message ?? ""))) {
+      // A non-UUID in a path parameter (a scanner, a stale bookmark, a typo)
+      // reached the database and came back as a bare 500. It is a bad request,
+      // and more importantly it should not look like the server is broken.
+      status = 404; code = "not_found";
+      title = "No such record";
+      detail = "That identifier is not valid.";
     } else if (exception instanceof HttpException) {
       status = exception.getStatus();
       const body = exception.getResponse() as Record<string, unknown> | string;
@@ -58,7 +65,9 @@ export class ProblemFilter implements ExceptionFilter {
     const traceId = randomUUID();
     // A 500 with no explanation anywhere is the hardest thing to debug in this
     // codebase; log the real cause server-side, keep the response opaque.
-    if (status >= 500) {
+    // Deliberate 5xx (an HttpException the code chose to throw) is not a
+    // mystery; only log the ones nobody expected.
+    if (status >= 500 && !(exception instanceof HttpException)) {
       console.error(`[error] ${traceId} ${req.method} ${req.url}`,
         (exception as any)?.message ?? exception,
         (exception as any)?.cause?.message ?? "",

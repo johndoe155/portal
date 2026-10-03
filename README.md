@@ -18,6 +18,26 @@ Secure, mobile-first, multi-persona portal for **Admin · Teacher · Student · 
 | 6 | **Review round 2 — all findings fixed 2026-10-02** | Role-grant hierarchy (privilege-escalation fix), CSP per-request nonce middleware, NAT-friendly rate limits (per-email strict / per-IP generous), PGlite fatal in production, MFA recovery codes + admin reset, invite-based admin UI, parent-pay exception, SSO httpOnly flow cookie + oid/tid linking + per-provider email_verified, health 503 on DB-down, encrypted outbox tokens, atomic idempotency, migration advisory lock, Caddy TLS in compose, NOLOGIN portal_app, k6 as a real CI gate, prod-only Docker image, in-app legal pages (48 API tests, 54 web checks) |
 | 6 | [Privacy policy](docs/legal/privacy-policy.md) · [Terms](docs/legal/terms-of-service.md) · [Retention & export](docs/legal/data-retention.md) | FERPA/COPPA/NDPA-aligned · in-app at `/legal/*` (templates — need lawyer review) |
 | 6 | [Real-school bootstrap — pilot runbook](docs/pilot-runbook.md) (ADR-013) | **Complete 2026-10-02** — one real school, zero demo data: bootstrap admin + ops-CLI MFA, school identity, years/terms, CSV import (dry-run + dedupe) for students/staff/guardians/classes/enrolments, guardian verification (email token **or** office confirm), fee templates with idempotent generation, grading config, reconciliation report as go-live gate · new admin screens: Students/Academics/Import/Reports/School · **67 API tests · 56 web smoke checks · 32/32 live bootstrap checks on an empty DB** |
+| 7 | [Go-live plan](docs/go-live-plan.md) — the production-readiness pass | **Complete 2026-10-03** — the portal is operable by a school, not just demonstrable. Docker build fixed · real branded email templates over SMTP with SPF/DKIM/DMARC records and retry-with-backoff + dead-letter screen · roster import as a resumable background job (multipart upload, batching, progress, error CSV) · encrypted off-host backups with a weekly restore drill surfaced on `/api/v1/health` · offboarding, audit-log screen, academic-year rollover and bulk two-factor onboarding · retention purge and right-to-erasure that match the published legal pages · go-live readiness checks · CI (`.github/workflows/ci.yml`) · **229 API tests · 56 web smoke checks** |
+
+## What state this is in
+
+Phases 1–6 built the product. **Phase 7 (`docs/go-live-plan.md`) made it
+operable**: the gap that mattered was not missing features but promises the
+product did not keep — emails that were raw JSON dumps, backups that did not
+match their runbook, legal pages describing a purge and an erasure right that
+did not exist, and an import that fell over on a real school's roster.
+
+Before a real school uses this, work through
+[`docs/pilot-runbook.md`](docs/pilot-runbook.md) and get
+**/admin/reports → Go-live readiness** green. It executes the runbook's
+checklist — SMTP, backups, restore drill, DPO address, two-factor coverage,
+calendar, roster — and blocks on the things that genuinely cannot wait.
+
+Five things only the school can do, listed in the go-live plan: publish the
+SPF/DKIM/DMARC records, supply `SMTP_URL`, provision the backup bucket and
+`BACKUP_ENCRYPTION_KEY`, have a lawyer review the legal templates, and provide
+the real roster.
 
 ## Running it
 
@@ -42,8 +62,8 @@ node scripts/mfa-token.mjs admin@school.example   # first-admin TOTP token (out-
 docker compose up --build                     # https://localhost (PORTAL_DOMAIN)
 
 # ── tests ─────────────────────────────────────────────────────────────
-npm test                                      # 57 API tests
-npm run smoke -w @portal/web                  # 54 web checks (servers up)
+npm test                                      # 229 API tests
+npm run smoke -w @portal/web                  # 56 web checks (servers up)
 node apps/web/test/round4-live.mjs            # 17 live checks on the running stack (fresh DB)
 ```
 
