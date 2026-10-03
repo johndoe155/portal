@@ -1,6 +1,6 @@
 # School Portal — Privacy Policy
 
-**Effective:** 2026-10-01 · **Owner:** School Portal Data Protection Officer (admin@school.example)
+**Effective:** 2026-10-01 · **Owner:** School Portal Data Protection Officer (see **School settings → DPO email**; rendered on the live `/legal/*` pages)
 **Applies to:** the High School Portal web application (students, parents/guardians, teachers, administrators).
 
 ## 1. Who we are / legal bases
@@ -43,7 +43,7 @@ Data is stored in the eu-west-1 region on managed Postgres with TLS in transit a
 Access, rectification, restriction, objection, deletion (subject to statutory education-record retention), and portability. Exercising them:
 
 - **In-app export:** an administrator with the `exports:write` capability generates a full personal-data bundle per user (`GET /api/v1/users/:id/export`).
-- **Requests:** email the DPO (admin@school.example). We acknowledge within 7 days and resolve within 30 days.
+- **Requests:** email the DPO (address configured in **School settings → DPO email**). We acknowledge within 7 days and resolve within 30 days.
 - **Complaints:** you may complain to the Nigeria Data Protection Commission (ndpc.gov.ng) or your local education authority.
 
 Students' FERPA rights are exercised through their parent/guardian until age 18 (or by eligible students directly).

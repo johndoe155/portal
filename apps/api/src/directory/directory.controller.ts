@@ -81,16 +81,25 @@ export class DirectoryController {
 
   @Get("users")
   @Perm("directory:read")
-  async listUsers(@Req() req: Request, @Query("page") page = "1", @Query("per") per = "25") {
+  async listUsers(@Req() req: Request, @Query("page") page = "1", @Query("per") per = "25",
+                  @Query("q") q?: string) {
     const p = req.principal!;
     const limit = Math.min(Number(per) || 25, 100);
     const offset = (Math.max(Number(page) || 1, 1) - 1) * limit;
+    // Paging through 600 accounts to find one person is not a workflow.
+    const term = (q ?? "").trim();
+    const where = term
+      ? sql`(${users.displayName} ilike ${"%" + term + "%"} or ${users.email} ilike ${"%" + term + "%"})`
+      : undefined;
     return withActor(this.db, { userId: p.userId, role: p.activeRole }, async (tx) => {
-      const rows = await tx.select({
+      const base = tx.select({
         id: users.id, email: users.email, displayName: users.displayName, status: users.status,
-      }).from(users).limit(limit).offset(offset);
-      const [{ total }] = await tx.select({ total: sql<number>`count(*)::int` }).from(users);
-      return { data: rows, meta: { page: Number(page) || 1, per: limit, total } };
+      }).from(users);
+      const rows = await (where ? base.where(where) : base)
+        .orderBy(users.displayName).limit(limit).offset(offset);
+      const countQ = tx.select({ total: sql<number>`count(*)::int` }).from(users);
+      const [{ total }] = await (where ? countQ.where(where) : countQ);
+      return { data: rows, meta: { page: Number(page) || 1, per: limit, total, q: term || null } };
     });
   }
 

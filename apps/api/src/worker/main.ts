@@ -11,6 +11,7 @@ import { runMigrations } from "../db/migrate";
 import { startWorker } from "../notify/notify.service";
 import { startImportWorker } from "../import/import.jobs";
 import { createMailer, mailConfigured, verifyMailer } from "../notify/mailer";
+import { startRetentionLoop } from "../retention/retention.service";
 
 async function main() {
   // Production: DATABASE_URL → node-postgres (Neon/Supabase/RDS).
@@ -39,6 +40,8 @@ async function main() {
   // Roster imports are heavy and long-running; they get their own loop so a
   // 6,000-row enrolments file never stalls outbox delivery.
   startImportWorker(db);
+  // The retention purge the legal pages promise. Daily, idempotent, audited.
+  startRetentionLoop(db);
   startWorker(db, {
     mailer,
     intervalMs,

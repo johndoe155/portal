@@ -56,6 +56,14 @@ export class ProblemFilter implements ExceptionFilter {
       }
     }
     const traceId = randomUUID();
+    // A 500 with no explanation anywhere is the hardest thing to debug in this
+    // codebase; log the real cause server-side, keep the response opaque.
+    if (status >= 500) {
+      console.error(`[error] ${traceId} ${req.method} ${req.url}`,
+        (exception as any)?.message ?? exception,
+        (exception as any)?.cause?.message ?? "",
+        (exception as any)?.stack ?? "");
+    }
     res.status(status).set("X-Trace-Id", traceId).json({
       type: `https://portal.school/errors/${code}`,
       title, status, code, detail, trace_id: traceId,

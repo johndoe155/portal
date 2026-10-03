@@ -1,4 +1,6 @@
 import type { Metadata } from "next";
+import { publicSchool } from "@/lib/session";
+import DpoContact from "@/components/dpo-contact";
 
 /** review-4 #1: per-request CSP nonce requires per-request rendering —
  * a statically cached page would bake in the build-time nonce and every
@@ -7,7 +9,8 @@ export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = { title: "Terms of Service — School Portal" };
 
-export default function TermsOfService() {
+export default async function TermsOfService() {
+  const school = await publicSchool();
   return (
     <main style={{ maxWidth: 720, margin: "0 auto", padding: "2rem 1rem", lineHeight: 1.7 }}>
       <h1>Terms of Service</h1>
@@ -49,6 +52,12 @@ export default function TermsOfService() {
 
       <h2>11. Changes</h2>
       <p>We may update these Terms. Material changes will be notified via the portal. Continued use after notification constitutes acceptance.</p>
+
+      <h2>12. Contact</h2>
+      {school.contact_email
+        ? <p>Questions about these Terms: <a href={`mailto:${school.contact_email}`}>{school.contact_email}</a>.</p>
+        : <p className="muted">No contact address has been configured for {school.name} yet.</p>}
+      <DpoContact school={school} purpose="For data-protection matters specifically," />
 
       <hr style={{ margin: "2rem 0" }} />
       <p><a href="/login">← Back to login</a></p>

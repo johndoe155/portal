@@ -62,3 +62,27 @@ export async function requireRole(...allowed: string[]): Promise<SessionView> {
   if (!allowed.includes(check.session.activeRole)) redirect(home);
   return check.session;
 }
+
+/**
+ * The school's identity, read without a session.
+ *
+ * The legal pages are public and must show the school's real DPO and contact
+ * addresses — a privacy policy that says "contact the DPO (configured at
+ * deployment)" is not a policy anyone can act on.
+ */
+export interface PublicSchool {
+  name: string;
+  contact_email?: string | null;
+  dpo_email?: string | null;
+  address?: string | null;
+  phone?: string | null;
+}
+export async function publicSchool(): Promise<PublicSchool> {
+  try {
+    const res = await fetch(`${API}/api/v1/school`, { cache: "no-store" });
+    if (!res.ok) return { name: "School Portal" };
+    return (await res.json()) as PublicSchool;
+  } catch {
+    return { name: "School Portal" };
+  }
+}

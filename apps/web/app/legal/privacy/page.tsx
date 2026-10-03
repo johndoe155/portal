@@ -1,4 +1,6 @@
 import type { Metadata } from "next";
+import { publicSchool } from "@/lib/session";
+import DpoContact from "@/components/dpo-contact";
 
 /** review-4 #1: per-request CSP nonce requires per-request rendering —
  * a statically cached page would bake in the build-time nonce and every
@@ -7,14 +9,16 @@ export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = { title: "Privacy Policy — School Portal" };
 
-export default function PrivacyPolicy() {
+export default async function PrivacyPolicy() {
+  const school = await publicSchool();
   return (
     <main style={{ maxWidth: 720, margin: "0 auto", padding: "2rem 1rem", lineHeight: 1.7 }}>
       <h1>Privacy Policy</h1>
       <p className="muted">Last updated: 2026-10-01 · <strong>Template — requires legal review before production use</strong></p>
 
       <h2>1. Data Controller</h2>
-      <p>The school operating this portal is the data controller. Contact your school&apos;s Data Protection Officer (DPO) for privacy questions. The DPO contact is configured at deployment.</p>
+      <p>{school.name} is the data controller for the personal data held in this portal.</p>
+      <DpoContact school={school} purpose="For any privacy question," />
 
       <h2>2. Data We Collect</h2>
       <ul>
@@ -51,7 +55,13 @@ export default function PrivacyPolicy() {
         <li>Objection: object to processing based on legitimate interest.</li>
         <li>Portability: receive your data in a structured, machine-readable format.</li>
       </ul>
-      <p>To exercise any right, contact your school&apos;s DPO.</p>
+      <DpoContact school={school} purpose="To exercise any of these rights," />
+      <p>
+        Erasure is carried out as irreversible anonymisation: identifying details are removed, while
+        records the school is legally required to keep — marks, attendance, fee records and the audit
+        trail — are retained without a named subject until their statutory window expires. The portal
+        will show the requester exactly which records fall into each category before anything is done.
+      </p>
 
       <h2>8. Children&apos;s Privacy (COPPA / NDPA §28)</h2>
       <p>Student accounts are created by the school, not self-registered. Parental consent is obtained at enrollment. Students under 13 are not permitted to create accounts independently.</p>

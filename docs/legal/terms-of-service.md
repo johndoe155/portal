@@ -8,7 +8,7 @@ The School Portal provides authenticated access to education records (grades, at
 ## 2. Accounts
 - Accounts are provisioned by the school (invite or directory import). You may not share credentials.
 - Staff and administrators must enroll two-factor authentication; access to staff functions is blocked until verified.
-- You must keep contact details current and report suspected compromise immediately (admin@school.example).
+- You must keep contact details current and report suspected compromise immediately (see **School settings → DPO email**; rendered on the live `/legal/*` pages).
 - The school may suspend accounts for policy violations or safeguarding reasons.
 
 ## 3. Acceptable use
@@ -21,7 +21,7 @@ Fee payments are processed by Paystack. The Portal stores invoice and payment re
 Teacher↔guardian threads are for school business and are retained as school records. Guardians currently have read access to threads about their child (v1 policy). Content is monitored only under the school's safeguarding policy.
 
 ## 6. Availability & support
-The service targets 99.5% monthly uptime during term time, with maintenance windows announced in-portal. Support: admin@school.example (acknowledged within 2 school days).
+The service targets 99.5% monthly uptime during term time, with maintenance windows announced in-portal. Support: the address in **School settings → Contact email** (acknowledged within 2 school days).
 
 ## 7. Disclaimers & liability
 The Portal is provided "as is" for educational administration. To the extent permitted by law, the school's liability is limited to direct damages and excludes indirect/consequential loss. Nothing limits liability for death/personal injury caused by negligence, or for fraud.

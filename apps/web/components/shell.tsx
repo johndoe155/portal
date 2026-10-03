@@ -39,6 +39,7 @@ const TABS: Record<string, Tab[]> = {
     { href: "/admin/reports", label: "Reports", perm: "directory:read" },
     { href: "/admin/notifications", label: "Email", perm: "audit:read" },
     { href: "/admin/audit", label: "Activity log", perm: "audit:read" },
+    { href: "/admin/retention", label: "Retention", perm: "settings:write" },
     { href: "/admin/school", label: "School", perm: "settings:write" },
   ],
   teacher: [

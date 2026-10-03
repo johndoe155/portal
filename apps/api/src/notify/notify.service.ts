@@ -295,8 +295,21 @@ export async function processQueue(db: Db, opts: WorkerOpts = {}, limit = Number
         // specific row; a future event will enqueue a fresh one.
         if (subs.length === 0) throw new PermanentMailError("no push subscription");
         for (const s of subs) {
-          await deliverPush({ endpoint: s.endpoint, p256dh: s.p256dh, authKey: s.authKey },
-            { kind: row.kind, payload: row.payload }, opts);
+          // Track per-subscription outcomes so retention can retire endpoints
+          // the browser has permanently stopped accepting, instead of pushing
+          // at a dead URL forever.
+          try {
+            await deliverPush({ endpoint: s.endpoint, p256dh: s.p256dh, authKey: s.authKey },
+              { kind: row.kind, payload: row.payload }, opts);
+            await withActor(db, SERVICE, (tx) => tx.update(pushSubscriptions)
+              .set({ failureCount: 0, lastSuccessAt: new Date() })
+              .where(eq(pushSubscriptions.id, s.id)));
+          } catch (pushErr) {
+            await withActor(db, SERVICE, (tx) => tx.update(pushSubscriptions)
+              .set({ failureCount: sql`${pushSubscriptions.failureCount} + 1`, lastFailureAt: new Date() })
+              .where(eq(pushSubscriptions.id, s.id)));
+            throw pushErr;
+          }
         }
       }
       outcomes.push({ id: row.id, attempts, ok: true, permanent: false });

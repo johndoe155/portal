@@ -10,6 +10,7 @@ import { makeSessionMiddleware } from "./common/session.middleware";
 import { ProblemFilter } from "./common/problem";
 import { CsrfGuard, PermGuard } from "./common/guards";
 import { startWorker } from "./notify/notify.service";
+import { startRetentionLoop } from "./retention/retention.service";
 
 export async function createApp(db: Db) {
   // bodyParser:false + manual express.json with `verify` — the webhook route
@@ -46,8 +47,11 @@ export async function createApp(db: Db) {
   // production: WORKER_INPROC=false + `npm run worker` beside real Postgres.
   if (process.env.WORKER_INPROC !== "false") {
     const stop = startWorker(db, { pushSinkFile: process.env.PUSH_SINK_FILE ?? "data/push-outbox.jsonl" });
+    // The retention purge rides along in single-node deployments; with a
+    // separate worker process it lives there instead.
+    const stopRetention = startRetentionLoop(db);
     app.enableShutdownHooks?.();
-    process.once("beforeExit", stop);
+    process.once("beforeExit", () => { stop(); stopRetention(); });
   }
   return app;
 }

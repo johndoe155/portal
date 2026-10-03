@@ -20,6 +20,12 @@ export const users = pgTable("users", {
   deactivatedAt: timestamp("deactivated_at", { withTimezone: true }),
   deactivatedBy: uuid("deactivated_by"),
   deactivationReason: text("deactivation_reason"),
+  /* 0013 erasure — anonymisation is a recorded state, not a silent UPDATE */
+  anonymizedAt: timestamp("anonymized_at", { withTimezone: true }),
+  anonymizedBy: uuid("anonymized_by"),
+  /** Records held under a statutory window: restricted, not erased (NDPA §34(4)). */
+  processingRestricted: boolean("processing_restricted").notNull().default(false),
+  erasureNote: text("erasure_note"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }),
 });
@@ -348,6 +354,10 @@ export const pushSubscriptions = pgTable("push_subscriptions", {
   authKey: text("auth_key"),
   userAgent: text("user_agent"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  /* 0013 retention: retire endpoints the browser has stopped accepting */
+  failureCount: integer("failure_count").notNull().default(0),
+  lastFailureAt: timestamp("last_failure_at", { withTimezone: true }),
+  lastSuccessAt: timestamp("last_success_at", { withTimezone: true }),
 });
 
 export const reportCards = pgTable("report_cards", {
@@ -465,4 +475,17 @@ export const yearRollovers = pgTable("year_rollovers", {
   studentStates: jsonb("student_states").notNull().default([]),
   revertedAt: timestamp("reverted_at", { withTimezone: true }),
   revertedBy: uuid("reverted_by"),
+});
+
+/* ── 0013: retention purge runs ── */
+export const retentionRuns = pgTable("retention_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+  dryRun: boolean("dry_run").notNull().default(false),
+  trigger: text("trigger").notNull().default("schedule"),
+  actorUserId: uuid("actor_user_id"),
+  counts: jsonb("counts").notNull().default({}),
+  ok: boolean("ok").notNull().default(false),
+  error: text("error"),
 });
