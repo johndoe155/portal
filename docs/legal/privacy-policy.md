@@ -8,8 +8,8 @@
 The school is the data controller for all personal data processed by the Portal. Processing relies on:
 
 - **FERPA (34 CFR Part 99)** — education records of enrolled students; the school is the educational agency/institution; Portal vendors are "school officials" with a legitimate educational interest under the school's direct control.
-- **COPPA** — students under 13 are provisioned only by the school; accounts carry no public profile, no advertising, no third-party behavioral tracking, and messaging is limited to school↔guardian threads. Guardian consent is obtained at enrollment (offline consent form on file).
-- **Nigeria Data Protection Act 2023 (NDPA) + NDPC GAID 2025** — lawful basis: performance of an educational contract and legal obligation; a Data Protection Impact Assessment (DPIA) covers the eu-west-1 managed-PaaS hosting (ADR-010), with Standard Contractual Clauses and a transfer register for cross-border transfers.
+- **COPPA** — students under 13 are provisioned only by the school; accounts carry no public profile, no advertising, no third-party behavioral tracking, and messaging is limited to school↔guardian threads. Guardian consent is obtained by the school at enrolment, on paper, **outside this system**: the portal records neither the consent nor pupils' dates of birth, so it cannot itself identify which pupils are under 13 or evidence consent for a particular child. Per-pupil consent capture is a known gap, tracked with automatic leaver anonymisation.
+- **Nigeria Data Protection Act 2023 (NDPA) + NDPC GAID 2025** — lawful basis: performance of an educational contract and legal obligation; cross-border transfers to the eu-west-1 managed-PaaS hosting (ADR-010) are covered by Standard Contractual Clauses and a transfer register. A DPIA is expected for processing at this scale; the school records its reference under **School → Compliance** and the published pages report it — or state its absence — rather than asserting one exists.
 
 ## 2. What we collect
 
@@ -28,11 +28,11 @@ We do **not** collect biometric data, location data, or advertising identifiers.
 
 ## 3. Why and how we process
 
-Authentication and access control (RBAC + row-level security), instruction and grading, attendance, safeguarding communications, fee administration, transport logistics, notifications (email/push you enable), statutory record-keeping, and security auditing. Every privileged action is written to a tamper-evident audit log.
+Authentication and access control (RBAC + row-level security), instruction and grading, attendance, safeguarding communications, fee administration, transport logistics, notifications (email, with per-category opt-out), statutory record-keeping, and security auditing. Every privileged action is written to a tamper-evident audit log.
 
 ## 4. Sharing
 
-We sell nothing and run no advertising. Data is shared only with: (a) the gateway (Paystack) for payment processing — reference and amount only; (b) the email/push providers for delivery; (c) authorities where legally compelled. All processors are under written contracts (NDPA §29) and listed in the transfer register.
+We sell nothing and run no advertising. Data is shared only with: (a) the gateway (Paystack) for payment processing — reference and amount only; (b) the school's email provider for delivery; (c) authorities where legally compelled. All processors are under written contracts (NDPA §29) and listed in the transfer register.
 
 ## 5. Storage, encryption, retention
 

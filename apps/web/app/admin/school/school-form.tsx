@@ -12,6 +12,8 @@ export default function SchoolForm({ initial }: { initial: Record<string, any> }
     address: initial.address ?? "", phone: initial.phone ?? "",
     timezone: initial.timezone ?? "Africa/Lagos", currency: initial.currency ?? "NGN",
     mail_sender: initial.mail_sender ?? "",
+    dpia_reference: initial.dpia_reference ?? "",
+    dpia_completed_at: initial.dpia_completed_at ?? "",
   });
   const [msg, setMsg] = useState("");
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement>) => setF({ ...f, [k]: e.target.value });
@@ -23,6 +25,8 @@ export default function SchoolForm({ initial }: { initial: Record<string, any> }
         logo_url: f.logo_url || null, contact_email: f.contact_email || null,
         dpo_email: f.dpo_email || null, address: f.address || null,
         phone: f.phone || null, mail_sender: f.mail_sender || null,
+        dpia_reference: f.dpia_reference || null,
+        dpia_completed_at: f.dpia_completed_at || null,
       }) });
       setMsg("Saved."); router.refresh();
     } catch (e: any) { setMsg(e?.message ?? "Save failed"); }
@@ -48,6 +52,17 @@ export default function SchoolForm({ initial }: { initial: Record<string, any> }
       {row("timezone", "Timezone")}
       {row("currency", "Currency (ISO 4217)")}
       {row("mail_sender", "Email sender address (e.g. portal@school.ng)")}
+
+      <h3 style={{ marginTop: 20, marginBottom: 4 }}>Compliance</h3>
+      <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
+        The published privacy and retention pages used to assert that a Data Protection Impact
+        Assessment had been filed, whatever the truth. They now report what is recorded here, and
+        say plainly when nothing is. A DPIA completed on paper still counts — record its reference
+        so the pages can cite it.
+      </p>
+      {row("dpia_reference", "DPIA reference (leave blank if none)")}
+      {row("dpia_completed_at", "DPIA completed on", "date")}
+
       <button className="btn" onClick={save}>Save settings</button>
       {msg ? <p className="muted">{msg}</p> : null}
     </div>

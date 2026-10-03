@@ -176,6 +176,10 @@ export const SchoolSettingsBody = z.object({
   timezone: z.string().min(1).max(64).optional(),
   currency: z.string().length(3).optional(),
   mail_sender: z.string().max(254).nullable().optional(),
+  /* The school's Data Protection Impact Assessment, if it has done one.
+     /legal/privacy used to assert a filed DPIA whether or not one existed. */
+  dpia_reference: z.string().max(120).nullable().optional(),
+  dpia_completed_at: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
 });
 export type SchoolSettingsBody = z.infer<typeof SchoolSettingsBody>;
 

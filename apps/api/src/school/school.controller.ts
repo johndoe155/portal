@@ -31,6 +31,9 @@ export class SchoolController {
         address: row.address, phone: row.phone,
         timezone: row.timezone, currency: row.currency,
         mail_sender: row.mailSender,
+        // Published on /legal/privacy §5 and /legal/retention. Null means the
+        // pages say "no DPIA recorded" rather than claiming one exists.
+        dpia_reference: row.dpiaReference, dpia_completed_at: row.dpiaCompletedAt,
       };
     });
   }
@@ -57,6 +60,8 @@ export class SchoolController {
         timezone: b.timezone ?? "Africa/Lagos",
         currency: (b.currency ?? "NGN").toUpperCase(),
         mailSender: b.mail_sender ?? null,
+        dpiaReference: b.dpia_reference?.trim() || null,
+        dpiaCompletedAt: b.dpia_completed_at || null,
         updatedAt: new Date(), updatedBy: p.userId,
       }).where(eq(schoolSettings.id, 1));
       await insertAudit(tx, { actorUserId: p.userId, action: "school.updated",

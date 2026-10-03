@@ -88,6 +88,9 @@ export interface PublicSchool {
   dpo_email?: string | null;
   address?: string | null;
   phone?: string | null;
+  /** The school's recorded DPIA, if any. Null ⇒ the legal pages say so. */
+  dpia_reference?: string | null;
+  dpia_completed_at?: string | null;
 }
 export async function publicSchool(): Promise<PublicSchool> {
   try {

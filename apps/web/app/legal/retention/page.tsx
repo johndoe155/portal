@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { publicSchool } from "@/lib/session";
 import DpoContact from "@/components/dpo-contact";
+import DpiaStatement from "@/components/dpia-statement";
 
 /** review-4 #1: per-request CSP nonce requires per-request rendering —
  * a statically cached page would bake in the build-time nonce and every
@@ -42,7 +43,7 @@ export default async function DataRetention() {
             ["Password reset tokens", "1 hour TTL; the spent record is purged after 30 days", "Security (minimise exposure window)"],
             ["Invitations and enrolment tokens", "7 days TTL; the spent record is purged after 30 days", "Operational (onboarding)"],
             ["Uploaded roster files and import jobs", "30 days after the import finishes", "Operational (minimise bulk personal data at rest)"],
-            ["Push subscriptions", "Retired after 90 days of continuous delivery failure, or on unsubscribe", "Consent"],
+            ["Email preferences", "Held with the account; cleared when the account is erased", "Consent"],
             ["Replay-protection keys", "7 days", "Operational (security)"],
             ["Transport assignments", "Duration of academic year + 1 year", "Contract, operational"],
           ].map(([cat, period, basis]) => (
@@ -85,11 +86,24 @@ export default async function DataRetention() {
         that copy expires.
       </p>
 
-      <h2>Cross-Border Transfers</h2>
-      <p>If hosted outside Nigeria, data transfers rely on Standard Contractual Clauses (SCCs). A Data Protection Impact Assessment (DPIA) is filed with the NDPC. See our <a href="/legal/privacy">Privacy Policy §5</a>.</p>
+      <h2>Impact Assessment and Cross-Border Transfers</h2>
+      <DpiaStatement school={school} />
+      <p>See our <a href="/legal/privacy">Privacy Policy §5</a>.</p>
 
       <h2>Children&apos;s Data (COPPA / NDPA §28)</h2>
-      <p>Student data for children under 13 is processed only with verified parental consent obtained at enrollment. Parents may request deletion of their child&apos;s data at any time, subject to statutory retention obligations for academic records.</p>
+      <p>
+        A guardian reaches a child&apos;s record only through a link the school creates and the
+        guardian confirms from their own email address; until that confirmation, no data about the
+        child is visible to them. Guardians may request deletion of their child&apos;s data at any
+        time, subject to the statutory retention obligations above, and the request is carried out
+        and recorded through the portal.
+      </p>
+      <p>
+        <strong>Limit of this portal:</strong> it does not store pupils&apos; dates of birth, so it
+        cannot identify which pupils are under 13, and it does not hold the parental consent taken
+        at enrolment. Both live in the school&apos;s admissions records. Capturing consent per pupil
+        inside the portal is a known gap, tracked alongside automatic leaver anonymisation.
+      </p>
 
       <h2>Contact</h2>
       <DpoContact school={school} purpose="To request deletion or ask about retention," />

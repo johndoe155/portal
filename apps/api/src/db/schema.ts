@@ -121,6 +121,10 @@ export const schoolSettings = pgTable("school_settings", {
   timezone: text("timezone").notNull().default("Africa/Lagos"),
   currency: text("currency").notNull().default("NGN"),
   mailSender: text("mail_sender"),
+  /* 0017: the school's actual DPIA, if it has one. The legal pages used to
+     assert a filed DPIA unconditionally; now they report what is here. */
+  dpiaReference: text("dpia_reference"),
+  dpiaCompletedAt: date("dpia_completed_at"),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   updatedBy: uuid("updated_by"),
 });

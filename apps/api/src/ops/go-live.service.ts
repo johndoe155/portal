@@ -87,6 +87,20 @@ export async function goLiveReadiness(db: Db): Promise<Readiness> {
       fix: "/admin/school",
     });
 
+    // /legal/privacy §5 published a claim about a filed DPIA that nothing in
+    // this system had ever recorded. It now reports what is here — which
+    // makes an empty field worth saying out loud before go-live.
+    add({
+      id: "dpia", group: "School identity", label: "Impact assessment recorded",
+      status: school?.dpiaReference ? "pass" : "warn",
+      detail: school?.dpiaReference
+        ? `DPIA ${school.dpiaReference}${school.dpiaCompletedAt ? `, completed ${school.dpiaCompletedAt}` : ""}.`
+        : "No DPIA reference recorded. Processing a whole school's pupil records normally " +
+          "requires one under NDPA §28, and until it is recorded here the privacy and retention " +
+          "pages will tell parents that none is on file.",
+      fix: "/admin/school → Compliance",
+    });
+
     add({
       id: "contact_email", group: "School identity", label: "General contact address",
       status: school?.contactEmail ? "pass" : "warn",

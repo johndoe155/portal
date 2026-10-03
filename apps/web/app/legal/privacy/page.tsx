@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { publicSchool } from "@/lib/session";
 import DpoContact from "@/components/dpo-contact";
+import DpiaStatement from "@/components/dpia-statement";
 
 /** review-4 #1: per-request CSP nonce requires per-request rendering —
  * a statically cached page would bake in the build-time nonce and every
@@ -35,14 +36,14 @@ export default async function PrivacyPolicy() {
         <li><strong>Contract:</strong> processing necessary to deliver educational services.</li>
         <li><strong>Legal obligation:</strong> statutory record-keeping (FERPA, NDPA).</li>
         <li><strong>Legitimate interest:</strong> security, fraud prevention, service improvement.</li>
-        <li><strong>Consent:</strong> optional features (push notifications, directory listing).</li>
+        <li><strong>Consent:</strong> optional email, such as absence alerts, marks notices and the daily summary, which you can switch off at any time under <a href="/account/notifications">Email preferences</a>.</li>
       </ul>
 
       <h2>4. Data Sharing</h2>
-      <p>We do not sell personal data. We share data only with: (a) authorised school staff on a need-to-know basis; (b) payment processors (Paystack) for fee collection; (c) email/push delivery services for notifications; (d) regulators when legally required.</p>
+      <p>We do not sell personal data. We share data only with: (a) authorised school staff on a need-to-know basis; (b) payment processors (Paystack) for fee collection; (c) the school's email provider, which carries notification messages; (d) regulators when legally required.</p>
 
-      <h2>5. Cross-Border Transfers</h2>
-      <p>If the portal is hosted outside Nigeria, we rely on Standard Contractual Clauses (SCCs) and a filed Data Protection Impact Assessment (DPIA) with the Nigeria Data Protection Commission (NDPC).</p>
+      <h2>5. Impact Assessment and Cross-Border Transfers</h2>
+      <DpiaStatement school={school} />
 
       <h2>6. Retention</h2>
       <p>See our <a href="/legal/retention">Data Retention Policy</a>.</p>
@@ -64,10 +65,18 @@ export default async function PrivacyPolicy() {
       </p>
 
       <h2>8. Children&apos;s Privacy (COPPA / NDPA §28)</h2>
-      <p>Student accounts are created by the school, not self-registered. Parental consent is obtained at enrollment. Students under 13 are not permitted to create accounts independently.</p>
+      <p>Student accounts are created by the school, not self-registered; no pupil can open an account independently. A parent or guardian only gains access to a child&apos;s record through a link created by the school and confirmed by the guardian from their own email address, and the school can end that link at any time.</p>
+      <p>
+        <strong>What this portal does not do:</strong> it does not record the parental consent
+        obtained at enrolment, and it does not hold pupils&apos; dates of birth, so it cannot
+        identify which pupils are under 13. Consent is handled by the school&apos;s own admissions
+        process, outside this system. Where a regulator requires evidence of consent for a
+        particular pupil, that evidence comes from the school&apos;s enrolment records, not from
+        here.
+      </p>
 
       <h2>9. Security</h2>
-      <p>TLS in transit, AES-256 encryption for MFA secrets at rest, bcrypt password hashing, role-based access control, row-level security in the database, audit logging.</p>
+      <p>TLS in transit, AES-256-GCM encryption for two-factor secrets at rest, scrypt password hashing with a per-password salt, role-based access control, row-level security enforced in the database itself, and an append-only, hash-chained audit log.</p>
 
       <h2>10. Changes</h2>
       <p>We will notify users of material changes via the portal notification system.</p>
