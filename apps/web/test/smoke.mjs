@@ -223,6 +223,34 @@ ok("invitee accepts + sets password", accept.status === 201 && accept.body.ok ==
 const invLogin = await call(jar(), "/api/v1/auth/login", { method: "POST", body: JSON.stringify({ email: invEmail, password: "Invitee!Pass123" }) });
 ok("invited user can log in", invLogin.status === 201 && invLogin.body.roles.includes("teacher"), JSON.stringify(invLogin.body).slice(0, 140));
 
+// ── email preferences: the page every List-Unsubscribe header points at ──
+// This 404'd. The header went out on every absence alert, grade notice,
+// message notification and digest, and the URL it named did not exist.
+const prefsPage = await call(jp, "/account/notifications", {});
+ok("GET /account/notifications renders (was a 404)",
+  prefsPage.status === 200 && String(prefsPage.body).includes("Email preferences"),
+  `status ${prefsPage.status}`);
+const prefsGet = await call(jp, "/api/v1/account/notifications", {});
+ok("preferences list every opt-outable category",
+  prefsGet.status === 200 && prefsGet.body.data?.length === 4 && prefsGet.body.data.every((p) => p.enabled),
+  JSON.stringify(prefsGet.body).slice(0, 160));
+const prefsPut = await call(jp, "/api/v1/account/notifications", { method: "PUT", body: JSON.stringify({ daily_digest: false }) });
+ok("a parent may switch their own emails off (the one parent write)",
+  prefsPut.status === 200 && prefsPut.body.data?.find((p) => p.kind === "daily_digest")?.enabled === false,
+  JSON.stringify(prefsPut.body).slice(0, 160));
+
+// one-click unsubscribe: no session, no CSRF token — exactly what Gmail sends
+const unsubBad = await call(jar(), "/api/v1/notifications/unsubscribe?t=rubbish", { method: "POST" });
+ok("one-click unsubscribe answers 2xx even for a bad token",
+  unsubBad.status === 201 && unsubBad.body.unsubscribed === false,
+  `${unsubBad.status} ${JSON.stringify(unsubBad.body).slice(0, 100)}`);
+
+// ── payment return page: where Paystack now sends the payer back to ──
+const payReturn = await call(jp, "/fees/return?reference=psk_nope", {});
+ok("GET /fees/return renders for a signed-in payer",
+  payReturn.status === 200 && String(payReturn.body).includes("Payment"),
+  `status ${payReturn.status}`);
+
 // security headers from helmet
 const hdr = await call(jar(), "/api/v1/health", {});
 ok("security headers present", !!hdr.headers?.["x-content-type-options"] && !!hdr.headers?.["content-security-policy"], JSON.stringify(Object.keys(hdr.headers ?? {})).slice(0, 160));

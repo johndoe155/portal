@@ -22,13 +22,13 @@ Legend: ✅ fixed in this pass (with verification) · 🟡 partial / config-gate
 | SSO: link-by-email without `email_verified` | ✅ rejected unless IdP asserts verified |
 | SSO: no nonce / PKCE | ✅ nonce in signed state verified against id_token; PKCE S256 on every authorization (mock IdP enforces both) |
 | SSO: HS256 mock path in production | ✅ config throws on `*_HMAC_SECRET` when NODE_ENV=production (override: `SSO_ALLOW_INSECURE=true`) |
-| Paystack Initialize not implemented | ✅ real `POST /transaction/initialize` (Bearer secret, NGN kobo) → `checkout_url`+`access_code`; 502/503 on failure; `PAYSTACK_API_BASE` for test mocks |
-| Email/push sinks | 🟡 unchanged dev sinks; production = set `SMTP_URL` + `VAPID_*` (documented in .env.example) |
+| Paystack Initialize not implemented | ✅ real `POST /transaction/initialize` (Bearer secret) → `checkout_url`+`access_code`; 502/503 on failure; `PAYSTACK_API_BASE` for test mocks. 2026-10-03: canonical `PAYSTACK_SECRET_KEY` (matching the runbook), `callback_url` + a `/fees/return` page so the payer is not stranded, and the charge currency comes from `school_settings` and is stored per payment (0016) instead of being hardcoded to NGN |
+| Email/push sinks | ✅ email: real SMTP via nodemailer, production refuses to boot without `SMTP_URL`, branded templates, retry/dead-letter. Push: **removed** 2026-10-03 (migration 0015) — it had no client and silently marked undelivered notifications "sent" |
 | Standalone worker PGlite-only | ✅ worker uses the same `DATABASE_URL` path as the API |
 | Idempotency in-memory map | ✅ `idempotency_keys` table (survives restarts, shared across nodes), 24 h TTL sweep |
-| No Dockerfile / CI / health / logging / error monitoring | ✅ multi-stage Dockerfile + compose (web = sole ingress); ✅ GitHub Actions CI (build, tests, real-PG migration proof, smoke); ✅ `GET /api/v1/health` (public, db probe); 🟡 Nest logger levels via `LOG_LEVEL` (structured pino = backlog); 📋 Sentry hook (backlog) |
+| No Dockerfile / CI / health / logging / error monitoring | ✅ multi-stage Dockerfile + compose (web = sole ingress); ✅ GitHub Actions CI — 7 jobs: build+API suite, real-PG migration proof (twice, for idempotency), `docker build`, backup→encrypt→restore drill, **web smoke** and **k6** (both added 2026-10-03; the docs had claimed k6 was a gate while nothing ran it), `npm audit`; ✅ `GET /api/v1/health` (public, db probe); 🟡 Nest logger levels via `LOG_LEVEL` (structured pino = backlog); 📋 Sentry hook (backlog) |
 | Audit `rowHash` salted with random UUID | ✅ deterministic sha256 over canonical payload — recomputable, tamper-evident (phase6 verifies). Append-order chaining via prev_hash deferred: audit_log SELECT is admin/auditor/service-only under RLS, so non-admin writers cannot read the previous row to chain; needs a scoped SECURITY DEFINER helper |
-| k6 never run | 🟡 script + CI step added; requires running servers (not executed in this sandbox — k6 absent) |
+| k6 never run | ✅ 2026-10-03: CI job `loadtest` installs k6, starts the API with load-test rate-limit ceilings and runs `PROFILE=ci` on every push. The full 50-VU + 300 req/s profile stays a manual run — a shared runner cannot measure a production SLO (see `apps/api/loadtest/README.md`) |
 | Playwright e2e | 📋 backlog — node:test + supertest + 54-check smoke cover the flows |
 
 ## Promised-in-docs gaps
@@ -38,10 +38,10 @@ Legend: ✅ fixed in this pass (with verification) · 🟡 partial / config-gate
 | Privacy policy / ToS / retention & export | ✅ `docs/legal/*` + in-product export `GET /users/:id/export` (exports:write) |
 | Transport capacity enforcement | ✅ 409 `capacity_reached` on assign (phase6) |
 | PII column encryption beyond TOTP | 📋 design: deterministic AES-256-GCM + HMAC blind index for lookup columns (email), envelope per-row keys from KMS; migration rewrites rows in batches |
-| COPPA gate (under-13) | 📋 design: `users.date_of_birth` + guardian-consent flag at provisioning; block invite/SSO self-service for under-13s without verified guardian link |
+| COPPA gate (under-13) | 📋 design: `users.date_of_birth` + guardian-consent flag at provisioning; block invite/SSO self-service for under-13s without verified guardian link. **The legal pages no longer claim this exists** (corrected 2026-10-03): the portal holds no DOB and no consent record, so it cannot identify under-13s, and `/legal/privacy` and `/legal/retention` now say so plainly instead of asserting "verified parental consent obtained at enrollment" |
 | WebAuthn passkeys | 📋 backlog: `@simplewebauthn/server`, webauthn_credentials table, platform-authenticator-first for staff |
 | WebSockets (live updates) | 📋 backlog: currently polling + digest; ws gateway for attendance/grade events |
-| PWA / offline attendance | 📋 backlog: service worker + IndexedDB queue for teacher registers |
+| PWA / offline attendance | 📋 backlog: service worker + IndexedDB queue for teacher registers. The half-built Web Push server code was removed in 0015 rather than left in place; a PWA will bring its own subscription table when it is actually built |
 | File storage (materials/uploads) | 📋 backlog: S3-compatible bucket, presigned URLs, MIME allowlist, per-object RLS via signed claims |
 
 ## Runbook essentials

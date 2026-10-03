@@ -62,7 +62,7 @@ These numbers drive every sizing decision. **Confirm or correct them before Phas
 | Client state | **Zustand** | Tiny; holds only UI concerns (active term, selected class, drawer state) — never authoritative data |
 | Large lists | **TanStack Virtual** | Gradebooks and rosters at 1,000+ rows stay at 60 fps on a mid-range Android |
 | Forms / validation | **React Hook Form + Zod** | Zod schemas live in `packages/contracts` and are **shared with the API** — one source of truth |
-| Offline / PWA | **Serwist (service worker) + IndexedDB (Dexie)** | Teachers mark attendance in a dead-signal classroom; queue and reconcile on reconnect |
+| Offline / PWA | **Serwist (service worker) + IndexedDB (Dexie)** — ⚠ **not built**, see note below | Teachers mark attendance in a dead-signal classroom; queue and reconcile on reconnect |
 | Charts | **Recharts** | Lightweight grade-distribution and trend visuals |
 | Calendar | **FullCalendar** (or a purpose-built month/week grid) | Master events + per-student assignment calendar in one component |
 | Testing | **Vitest + Testing Library + Playwright** (mobile viewport matrix) | E2E runs on 360×800 and 390×844 as first-class targets, not an afterthought |
@@ -141,7 +141,7 @@ These numbers drive every sizing decision. **Confirm or correct them before Phas
 │  PRESENTATION — Next.js 16 App Router (RSC + proxy.ts guard)    │
 │                                                                 │
 │   /admin   /teacher   /student   /parent   /login  /callback    │
-│   Role-routed layouts · offline attendance · Web Push client    │
+│   Role-routed layouts (no offline/PWA layer — see note)         │
 │                                                                 │
 │   BFF: httpOnly session cookie, no bearer tokens in the browser │
 └───────────────┬─────────────────────────────┬───────────────────┘
@@ -173,7 +173,7 @@ These numbers drive every sizing decision. **Confirm or correct them before Phas
     │      └───────────────┬───────────────────┘
     │                      ▼
     │              ┌───────────────┐   ┌───────────────────────┐
-    │              │ SES / Postmark│   │ Web Push (VAPID/FCM)  │
+    │              │ SMTP (any ESP)│   │ (no push — removed)   │
     │              └───────────────┘   └───────────────────────┘
     ▼
 ┌─────────────────────────────────────────────────────────────────┐
@@ -420,3 +420,30 @@ Consequences recorded in [`adr/phase-1-decisions.md`](adr/phase-1-decisions.md) 
 - Node.js 24 LTS 24.21.0; active support ends 2026-10-20, EOL 2028-04-30; Node 26 enters LTS 2026-10-28 — https://latestat.com/nodejs/24 ; https://eosl.date/eol/product/nodejs/
 - FERPA: 34 CFR part 99 remains operative; ED rulemaking RIN 1875-AA15 targeted NPRM 01/2026 and final action 05/2026, no confirmed final amendment as of Sep 2026 — https://studentprivacy.ed.gov/ferpa ; https://www.reginfo.gov/public/do/eAgendaViewRule?pubId=202504&RIN=1875-AA15
 - Nigeria NDPA 2023 + GAID 2025: cross-border transfers §§41–43, DPIA filing, 72-hour breach notification, annual Compliance Audit Return — https://iclg.com/practice-areas/data-protection-laws-and-regulations/nigeria/ ; https://globallawexperts.com/nigeria-data-protection-compliance-2026/
+
+---
+
+## Addendum — 2026-10-03: what was not built
+
+Keeping a design document honest matters as much as keeping the code honest;
+a target written in the present tense is how a reader comes to believe a
+feature exists.
+
+- **Offline / PWA.** No service worker, no manifest, no IndexedDB queue, no
+  offline attendance. Nothing of this layer was built.
+- **Web Push.** Partially built on the server (subscribe/unsubscribe
+  endpoints, a `push_subscriptions` table, the `web-push` dependency) and
+  entirely absent on the client, so no subscription ever existed. With no
+  VAPID keys the worker wrote payloads to a file on disk and marked the
+  notification **sent** — a school reading the outbox saw "delivered" for an
+  absence alert that reached nobody. Removed in
+  `0015_drop_push_subscriptions.sql`. Guardians get the same alert by email,
+  which is the channel that works, and can opt out per category at
+  `/account/notifications`.
+- **Redis, BullMQ, Socket.IO, read replica.** Not used. The outbox, the
+  import jobs and the retention purge are Postgres-backed loops in the
+  worker process; sessions are database rows. This is deliberate for a
+  single-school deployment and is recorded in `docs/production-roadmap.md`.
+
+A PWA is a real piece of work and stays on the roadmap. It will bring its own
+table when it is actually built.

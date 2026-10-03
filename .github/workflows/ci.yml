@@ -199,6 +199,118 @@ jobs:
             if (j.result !== "passed") { console.error("restore drill did not pass", j); process.exit(1); }
           '
 
+  # ── The browser-facing stack, end to end ───────────────────────────────────
+  # README and docs/go-live-plan both described a web smoke suite as a gate.
+  # apps/web/test/smoke.mjs is real and has 56 assertions — it just never ran
+  # anywhere except on somebody's laptop. It drives the BFF the way a browser
+  # does: real cookies, real CSRF, real redirects, real MFA ceremony. Those are
+  # exactly the things the API suite cannot see, because the API suite talks to
+  # Nest directly and never goes through Next's proxy.
+  web-smoke:
+    name: Web smoke (BFF, cookies, CSRF)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+
+      - name: Start the API
+        # PGlite, so no database service is needed. SEED_DEMO gives the suite
+        # the demo accounts it signs in as. The suite starts its own Paystack
+        # mock on 9311, so one must NOT be started here — it would collide.
+        env:
+          WORKER_INPROC: "true"
+          SEED_DEMO: "true"
+          COOKIE_SECURE: "false"
+          PAYSTACK_SECRET_KEY: sk_test_dev_secret
+          PAYSTACK_API_BASE: http://127.0.0.1:9311
+          PORT: "8080"
+        run: |
+          rm -rf apps/api/data
+          node apps/api/dist/main.js > /tmp/api.log 2>&1 &
+          echo $! > /tmp/api.pid
+          npx --yes wait-on -t 90000 http-get://127.0.0.1:8080/api/v1/health
+
+      - name: Start the web app
+        env:
+          API_INTERNAL: http://127.0.0.1:8080
+        run: |
+          (cd apps/web && npx next start -H 0.0.0.0 -p 3000 > /tmp/web.log 2>&1 &)
+          npx --yes wait-on -t 90000 http-get://127.0.0.1:3000/login
+
+      - name: Smoke suite
+        run: npm run smoke -w @portal/web
+
+      - name: Server logs
+        if: always()
+        run: |
+          echo "── api ──"; tail -n 200 /tmp/api.log || true
+          echo "── web ──"; tail -n 200 /tmp/web.log || true
+
+  # ── Load test ──────────────────────────────────────────────────────────────
+  # README called k6 "a real CI gate" and docs/go-live-plan listed it as one.
+  # It was neither: the script existed, nothing ran it. See
+  # apps/api/loadtest/README.md for why the CI profile's latency threshold is
+  # deliberately loose — a gate that fails on shared-runner noise is a gate
+  # somebody turns off.
+  loadtest:
+    name: Load test (k6)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build -w @portal/contracts && npm run build -w @portal/api
+
+      - name: Install k6
+        run: |
+          set -euo pipefail
+          curl -fsSL https://dl.k6.io/key.gpg \
+            | sudo gpg --dearmor -o /usr/share/keyrings/k6-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" \
+            | sudo tee /etc/apt/sources.list.d/k6.list > /dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq k6
+          k6 version
+
+      - name: Start the API with load-test rate-limit ceilings
+        # The profile logs in on every iteration, which trips the production
+        # login throttles by design. Those throttles are asserted in the
+        # phase-6 and phase-7 suites; this job measures throughput.
+        env:
+          WORKER_INPROC: "true"
+          SEED_DEMO: "true"
+          COOKIE_SECURE: "false"
+          PORT: "8080"
+          RATE_LIMIT_LOGIN_MAX: "1000000"
+          RATE_LIMIT_LOGIN_IP_MAX: "1000000"
+          RATE_LIMIT_ACCT_OPS_IP_MAX: "1000000"
+          RATE_LIMIT_GENERAL_MAX: "1000000"
+          RATE_LIMIT_TOTP_MAX: "1000000"
+        run: |
+          rm -rf apps/api/data
+          node apps/api/dist/main.js > /tmp/api-load.log 2>&1 &
+          npx --yes wait-on -t 90000 http-get://127.0.0.1:8080/api/v1/health
+
+      - name: Run the CI profile
+        # Non-zero exit if a threshold is breached — that is the gate.
+        run: k6 run -e PROFILE=ci -e BASE=http://127.0.0.1:8080 apps/api/loadtest/portal.js
+
+      - name: API log
+        if: always()
+        run: tail -n 200 /tmp/api-load.log || true
+
   # ── Dependency advisories ──────────────────────────────────────────────────
   audit:
     name: npm audit

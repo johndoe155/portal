@@ -65,7 +65,7 @@ events (standalone +    notifications ∞──1     audit_log (append-only)
   mirrored via views       users               consent_records ∞──1 users
 announcements           notification_deliveries
 conversations ∞──1         ∞──1 notifications
-  students (subject)    push_subscriptions ∞──1 users
+  students (subject)
 messages ∞──1 conversations
 ```
 
@@ -232,13 +232,13 @@ messages ∞──1 conversations
 
 ### 3.11 Notifications
 
-**notification_preferences** — `user_id`, `kind notification_kind`, `channel ∈ {email, push}`, `enabled bool`. `UNIQUE (user_id, kind, channel)`. Sensible defaults seeded at first login.
+**notification_preferences** — designed here, **never built**; the `List-Unsubscribe` header in every bulk email pointed at a page that did not exist for the whole of phases 5–7. Implemented 2026-10-03 as `users.notification_prefs jsonb` (`0014_notification_prefs.sql`) rather than a table: there is one channel (email), four opt-outable categories, and an opt-out model where an absent key means subscribed — so the common case stores nothing and no backfill is needed. `UNIQUE (user_id, kind, channel)` and seeded defaults both become unnecessary.
 
 **notifications** — in-app record. `user_id`, `kind`, `title`, `body`, `entity_type text`, `entity_id uuid`, `read_at`. Index `(user_id, read_at DESC)`.
 
 **notification_deliveries** — per-channel send log. `notification_id`, `channel`, `status ∈ {queued, sent, failed, bounced}`, `provider_ref`, `sent_at`, `error`.
 
-**push_subscriptions** — `user_id`, `endpoint text UNIQUE`, `p256dh_key`, `auth_secret`, `user_agent`.
+~~**push_subscriptions**~~ — **dropped 2026-10-03** (`0015_drop_push_subscriptions.sql`). No client ever wrote to it, and the worker marked undelivered push notifications "sent". Email opt-outs live in `users.notification_prefs` (`0014`) instead.
 
 ### 3.12 Compliance
 

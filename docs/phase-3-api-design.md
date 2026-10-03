@@ -195,7 +195,7 @@ Any `POST/PUT/PATCH/DELETE` under a parent-scoped route → `403 parent_read_onl
 | `GET /announcements?scope=` · `POST` · `PATCH /announcements/{id}` · `POST /announcements/{id}/publish` | Board | A T (write) |
 | `GET /notifications` · `POST /notifications/{id}/read` · `POST /notifications/read-all` | Bell | any |
 | `GET /notification-preferences` · `PUT /notification-preferences` | Per kind × channel | any |
-| `POST /push/subscribe` · `DELETE /push/subscribe/{id}` | Web Push keys | any |
+| ~~`POST /push/subscribe`~~ · ~~`DELETE /push/subscribe/{id}`~~ | **Removed 2026-10-03** (migration 0015) — never had a client. Replaced by `GET`/`PUT /account/notifications` (per-category email opt-out) and `POST /notifications/unsubscribe` (RFC 8058 one-click, unauthenticated, HMAC-signed token) | any / public |
 
 ### 2.11 Compliance & ops (8)
 | Method & path | Purpose | Roles |

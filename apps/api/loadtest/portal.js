@@ -25,40 +25,82 @@ import encoding from "k6/encoding";
 const BASE = __ENV.BASE ?? "http://127.0.0.1:8080";
 const PASSWORD = __ENV.PASSWORD ?? "Passw0rd!";
 
-export const options = {
-  scenarios: {
-    // steady bell-rush traffic
-    steady: {
-      executor: "ramping-vus",
-      startVUs: 0,
-      stages: [
-        { duration: "30s", target: 50 },   // ramp up
-        { duration: "1m", target: 50 },    // sustain
-        { duration: "20s", target: 0 },    // ramp down
-      ],
-      gracefulRampDown: "10s",
+/**
+ * Two profiles.
+ *
+ * The default is the real thing: 50 sustained VUs plus a 300 req/s spike,
+ * run by hand against a box that resembles production, with production SLOs.
+ *
+ * PROFILE=ci is what runs on every push. A shared GitHub runner hosting the
+ * API, the database and the load generator in one 2-core container cannot
+ * measure a production SLO, and a gate that fails on runner noise is a gate
+ * somebody disables within a fortnight. So CI asserts what CI can honestly
+ * assert: the script still drives every hot path, essentially nothing errors,
+ * and latency has not regressed by an order of magnitude. Both profiles run
+ * the same code, so the script cannot rot between manual runs.
+ */
+const PROFILE = __ENV.PROFILE ?? "full";
+
+const PROFILES = {
+  full: {
+    scenarios: {
+      // steady bell-rush traffic
+      steady: {
+        executor: "ramping-vus",
+        startVUs: 0,
+        stages: [
+          { duration: "30s", target: 50 },   // ramp up
+          { duration: "1m", target: 50 },    // sustain
+          { duration: "20s", target: 0 },    // ramp down
+        ],
+        gracefulRampDown: "10s",
+      },
+      // short spike (whole-school login at 07:45)
+      spike: {
+        executor: "ramping-arrival-rate",
+        startRate: 10,
+        timeUnit: "1s",
+        preAllocatedVUs: 200,
+        maxVUs: 400,
+        stages: [
+          { duration: "10s", target: 100 },
+          { duration: "30s", target: 300 },  // spike
+          { duration: "20s", target: 20 },
+        ],
+        startTime: "2m10s",
+      },
     },
-    // short spike (whole-school login at 07:45)
-    spike: {
-      executor: "ramping-arrival-rate",
-      startRate: 10,
-      timeUnit: "1s",
-      preAllocatedVUs: 200,
-      maxVUs: 400,
-      stages: [
-        { duration: "10s", target: 100 },
-        { duration: "30s", target: 300 },  // spike
-        { duration: "20s", target: 20 },
-      ],
-      startTime: "2m10s",
+    thresholds: {
+      http_req_failed: ["rate<0.01"],        // <1% errors
+      http_req_duration: ["p(95)<600"],      // 95th pct < 600ms
+      checks: ["rate>0.98"],
     },
   },
-  thresholds: {
-    http_req_failed: ["rate<0.01"],        // <1% errors
-    http_req_duration: ["p(95)<600"],      // 95th pct < 600ms
-    "checks": ["rate>0.98"],
+  ci: {
+    scenarios: {
+      steady: {
+        executor: "ramping-vus",
+        startVUs: 0,
+        stages: [
+          { duration: "10s", target: 10 },
+          { duration: "30s", target: 10 },
+          { duration: "5s", target: 0 },
+        ],
+        gracefulRampDown: "10s",
+      },
+    },
+    thresholds: {
+      // Errors are still errors anywhere. A 500 under ten users is a bug.
+      http_req_failed: ["rate<0.01"],
+      // Deliberately loose: this is a "has it fallen off a cliff" guard on a
+      // shared runner, not an SLO. The SLO lives in the full profile.
+      http_req_duration: ["p(95)<3000"],
+      checks: ["rate>0.98"],
+    },
   },
 };
+
+export const options = PROFILES[PROFILE] ?? PROFILES.full;
 
 const jsonHeaders = { "Content-Type": "application/json" };
 

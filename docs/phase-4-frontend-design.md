@@ -226,6 +226,17 @@ CalendarPage / NotificationsPage (+ per-child channel preferences)
 
 ## 5. Offline attendance & grade-draft sync
 
+> **Not built.** The offline/PWA layer described here — Serwist service
+> worker, IndexedDB queueing, offline attendance, Web Push — was never
+> implemented. The partial Web Push server code that did exist (subscribe
+> endpoints, a `push_subscriptions` table, a `web-push` dependency) was
+> removed in migration `0015_drop_push_subscriptions.sql` on 2026-10-03,
+> because without a service worker it silently marked undelivered
+> notifications "sent". Guardians are notified by email, with per-category
+> opt-out at `/account/notifications`. A real PWA is on the roadmap
+> (`docs/production-roadmap.md`); this section describes the target, not the
+> system.
+
 1. Register UI writes to Dexie `outbox` **first** (instant chip), then tries `POST /sections/{id}/attendance` with `Idempotency-Key`.
 2. Online: 200 → mark synced, Query cache updated from server response.
 3. Offline/timeout: stays queued; `SyncBadge` shows depth; service-worker `online` event + visibility flush with backoff.
